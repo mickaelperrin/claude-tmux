@@ -102,64 +102,110 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or(10)
         .max(10);
 
-    let items: Vec<ListItem> = filtered
-        .iter()
-        .enumerate()
-        .map(|(i, session)| {
-            let is_selected = i == app.selected;
-            let is_current = app
-                .current_session
-                .as_ref()
-                .is_some_and(|c| c == &session.name);
+    let mut items: Vec<ListItem> = Vec::new();
 
-            // Build the line
-            let marker = if is_selected { "▸" } else { " " };
-            let status = &session.claude_code_status;
+    for (i, session) in filtered.iter().enumerate() {
+        let is_selected = i == app.selected;
+        let is_current = app
+            .current_session
+            .as_ref()
+            .is_some_and(|c| c == &session.name);
 
-            // Use brighter colors when selected so text is readable on dark background
-            let status_color = match (status, is_selected) {
-                (ClaudeCodeStatus::Working, _) => Color::Green,
-                (ClaudeCodeStatus::WaitingInput, _) => Color::Yellow,
-                (ClaudeCodeStatus::Idle, true) => Color::White,
-                (ClaudeCodeStatus::Idle, false) => Color::DarkGray,
-                (ClaudeCodeStatus::Unknown, true) => Color::Gray,
-                (ClaudeCodeStatus::Unknown, false) => Color::DarkGray,
-            };
+        // Marker changes based on expanded state
+        let marker = if is_selected {
+            if app.details_expanded { "▾" } else { "▸" }
+        } else {
+            " "
+        };
+        let status = &session.claude_code_status;
 
-            let path_color = if is_selected { Color::White } else { Color::DarkGray };
+        // Use brighter colors when selected so text is readable on dark background
+        let status_color = match (status, is_selected) {
+            (ClaudeCodeStatus::Working, _) => Color::Green,
+            (ClaudeCodeStatus::WaitingInput, _) => Color::Yellow,
+            (ClaudeCodeStatus::Idle, true) => Color::White,
+            (ClaudeCodeStatus::Idle, false) => Color::DarkGray,
+            (ClaudeCodeStatus::Unknown, true) => Color::Gray,
+            (ClaudeCodeStatus::Unknown, false) => Color::DarkGray,
+        };
 
-            let name_style = if is_current {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+        let path_color = if is_selected { Color::White } else { Color::DarkGray };
 
-            let line = Line::from(vec![
-                Span::raw(format!(" {} ", marker)),
-                Span::styled(
-                    format!("{:<width$}", session.name, width = max_name_len),
-                    name_style,
-                ),
+        let name_style = if is_current {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let line = Line::from(vec![
+            Span::raw(format!(" {} ", marker)),
+            Span::styled(
+                format!("{:<width$}", session.name, width = max_name_len),
+                name_style,
+            ),
+            Span::raw("  "),
+            Span::styled(status.symbol(), Style::default().fg(status_color)),
+            Span::raw(" "),
+            Span::styled(
+                format!("{:<8}", status.label()),
+                Style::default().fg(status_color),
+            ),
+            Span::raw("  "),
+            Span::styled(session.display_path(), Style::default().fg(path_color)),
+        ]);
+
+        let style = if is_selected {
+            Style::default().bg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+
+        items.push(ListItem::new(line).style(style));
+
+        // Add metadata rows if this session is selected and expanded
+        if is_selected && app.details_expanded {
+            let metadata_style = Style::default().fg(Color::DarkGray).bg(Color::DarkGray);
+            let label_style = Style::default().fg(Color::Cyan).bg(Color::DarkGray);
+
+            // Build metadata line with windows, panes, duration, attached
+            let attached_str = if session.attached { "yes" } else { "no" };
+            let pane_count = session.panes.len();
+
+            let meta_line = Line::from(vec![
+                Span::raw("     "),
+                Span::styled("windows: ", label_style),
+                Span::styled(format!("{}", session.window_count), metadata_style),
                 Span::raw("  "),
-                Span::styled(status.symbol(), Style::default().fg(status_color)),
-                Span::raw(" "),
-                Span::styled(
-                    format!("{:<8}", status.label()),
-                    Style::default().fg(status_color),
-                ),
+                Span::styled("panes: ", label_style),
+                Span::styled(format!("{}", pane_count), metadata_style),
                 Span::raw("  "),
-                Span::styled(session.display_path(), Style::default().fg(path_color)),
+                Span::styled("uptime: ", label_style),
+                Span::styled(session.duration(), metadata_style),
+                Span::raw("  "),
+                Span::styled("attached: ", label_style),
+                Span::styled(attached_str, metadata_style),
             ]);
 
-            let style = if is_selected {
-                Style::default().bg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
+            items.push(ListItem::new(meta_line).style(Style::default().bg(Color::DarkGray)));
 
-            ListItem::new(line).style(style)
-        })
-        .collect();
+            // Show pane commands if there are multiple panes
+            if pane_count > 1 {
+                let pane_commands: Vec<String> = session
+                    .panes
+                    .iter()
+                    .map(|p| p.current_command.clone())
+                    .collect();
+
+                let panes_line = Line::from(vec![
+                    Span::raw("     "),
+                    Span::styled("pane cmds: ", label_style),
+                    Span::styled(pane_commands.join(", "), metadata_style),
+                ]);
+
+                items.push(ListItem::new(panes_line).style(Style::default().bg(Color::DarkGray)));
+            }
+        }
+    }
 
     let list = List::new(items);
     frame.render_widget(list, area);
@@ -257,7 +303,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
-        Mode::Normal => "  ? help  ↑↓/jk navigate  ⏎ switch  n new  K kill  r rename  / filter  R refresh  q quit",
+        Mode::Normal => "  ? help  jk navigate  hl expand/collapse  ⏎ switch  n new  K kill  r rename  / filter  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",
         Mode::ConfirmKill { .. } => "  ⏎/y confirm  n/esc cancel",
         Mode::NewSession { .. } => "  ⏎ create  tab switch field  esc cancel",
@@ -394,6 +440,8 @@ fn render_help(frame: &mut Frame) {
         )),
         Line::raw("  j / ↓       Move down"),
         Line::raw("  k / ↑       Move up"),
+        Line::raw("  l / →       Expand details"),
+        Line::raw("  h / ←       Collapse details"),
         Line::raw("  Enter       Switch to session"),
         Line::raw(""),
         Line::from(Span::styled(

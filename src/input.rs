@@ -32,6 +32,14 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.select_prev();
         }
 
+        // Expand/collapse details
+        KeyCode::Char('l') | KeyCode::Right => {
+            app.expand_details();
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            app.collapse_details();
+        }
+
         // Switch to session
         KeyCode::Enter => {
             app.switch_to_selected();

@@ -49,6 +49,8 @@ pub struct App {
     pub message: Option<String>,
     /// Cached preview content for the selected session's pane
     pub preview_content: Option<String>,
+    /// Whether details for the selected session are expanded
+    pub details_expanded: bool,
 }
 
 impl App {
@@ -67,6 +69,7 @@ impl App {
             error: None,
             message: None,
             preview_content: None,
+            details_expanded: false,
         };
 
         app.update_preview();
@@ -309,6 +312,16 @@ impl App {
     pub fn show_help(&mut self) {
         self.clear_messages();
         self.mode = Mode::Help;
+    }
+
+    /// Expand the details panel for the selected session
+    pub fn expand_details(&mut self) {
+        self.details_expanded = true;
+    }
+
+    /// Collapse the details panel
+    pub fn collapse_details(&mut self) {
+        self.details_expanded = false;
     }
 
     /// Cancel current mode and return to normal

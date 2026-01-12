@@ -59,6 +59,8 @@ pub struct Session {
     pub attached: bool,
     /// Working directory (from the Claude Code pane, or first pane)
     pub working_directory: PathBuf,
+    /// Number of windows in this session
+    pub window_count: usize,
     /// All panes in this session
     pub panes: Vec<Pane>,
     /// Pane ID containing Claude Code, if any
@@ -80,5 +82,29 @@ impl Session {
         }
 
         path.display().to_string()
+    }
+
+    /// Returns a human-readable duration since session creation
+    pub fn duration(&self) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let elapsed_secs = (now - self.created).max(0) as u64;
+
+        let days = elapsed_secs / 86400;
+        let hours = (elapsed_secs % 86400) / 3600;
+        let minutes = (elapsed_secs % 3600) / 60;
+
+        if days > 0 {
+            format!("{}d {}h", days, hours)
+        } else if hours > 0 {
+            format!("{}h {}m", hours, minutes)
+        } else {
+            format!("{}m", minutes.max(1))
+        }
     }
 }

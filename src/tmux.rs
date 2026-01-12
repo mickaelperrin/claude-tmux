@@ -16,7 +16,7 @@ impl Tmux {
             .args([
                 "list-sessions",
                 "-F",
-                "#{session_name}\t#{session_created}\t#{session_attached}",
+                "#{session_name}\t#{session_created}\t#{session_attached}\t#{session_windows}",
             ])
             .output()
             .context("Failed to execute tmux list-sessions")?;
@@ -35,10 +35,11 @@ impl Tmux {
 
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 3 {
+            if parts.len() >= 4 {
                 let name = parts[0].to_string();
                 let created = parts[1].parse().unwrap_or(0);
                 let attached = parts[2] == "1";
+                let window_count = parts[3].parse().unwrap_or(1);
 
                 // Get panes for this session
                 let panes = Self::list_panes(&name).unwrap_or_default();
@@ -60,6 +61,7 @@ impl Tmux {
                     created,
                     attached,
                     working_directory,
+                    window_count,
                     panes,
                     claude_code_pane,
                     claude_code_status,
