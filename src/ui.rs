@@ -164,7 +164,7 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
 
         // Add metadata rows if this session is selected and expanded
         if is_selected && app.details_expanded {
-            let metadata_style = Style::default().fg(Color::DarkGray).bg(Color::DarkGray);
+            let value_style = Style::default().fg(Color::White).bg(Color::DarkGray);
             let label_style = Style::default().fg(Color::Cyan).bg(Color::DarkGray);
 
             // Build metadata line with windows, panes, duration, attached
@@ -174,16 +174,16 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             let meta_line = Line::from(vec![
                 Span::raw("     "),
                 Span::styled("windows: ", label_style),
-                Span::styled(format!("{}", session.window_count), metadata_style),
+                Span::styled(format!("{}", session.window_count), value_style),
                 Span::raw("  "),
                 Span::styled("panes: ", label_style),
-                Span::styled(format!("{}", pane_count), metadata_style),
+                Span::styled(format!("{}", pane_count), value_style),
                 Span::raw("  "),
                 Span::styled("uptime: ", label_style),
-                Span::styled(session.duration(), metadata_style),
+                Span::styled(session.duration(), value_style),
                 Span::raw("  "),
                 Span::styled("attached: ", label_style),
-                Span::styled(attached_str, metadata_style),
+                Span::styled(attached_str, value_style),
             ]);
 
             items.push(ListItem::new(meta_line).style(Style::default().bg(Color::DarkGray)));
@@ -199,7 +199,7 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                 let panes_line = Line::from(vec![
                     Span::raw("     "),
                     Span::styled("pane cmds: ", label_style),
-                    Span::styled(pane_commands.join(", "), metadata_style),
+                    Span::styled(pane_commands.join(", "), value_style),
                 ]);
 
                 items.push(ListItem::new(panes_line).style(Style::default().bg(Color::DarkGray)));
@@ -426,7 +426,7 @@ fn render_rename_dialog(frame: &mut Frame, old_name: &str, new_name: &str) {
 }
 
 fn render_help(frame: &mut Frame) {
-    let area = centered_rect(60, 16, frame.area());
+    let area = centered_rect(60, 18, frame.area());
 
     let block = Block::default()
         .title(" Help ")
