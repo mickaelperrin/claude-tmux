@@ -1,15 +1,123 @@
-# Claude Code Manager
+# CCM - Claude Code Manager
 
-## Introduction
-This is a TUI program that manages claude code for you using tmux.
-It is able to run in a tmux display-popup, and can execute tmux commands to manage tmux sessions running a Claude Code pane.
+A terminal user interface for managing multiple Claude Code sessions within tmux. CCM provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management.
 
+## Features
+
+- **Session Overview** — See all tmux sessions at a glance with Claude Code status indicators
+- **Status Detection** — Know whether each Claude Code instance is idle, working, or waiting for input
+- **Quick Switching** — Jump to any session with minimal keystrokes
+- **Live Preview** — See the last 15 lines of the selected session's Claude Code pane with full ANSI color support
+- **Session Management** — Create, kill, and rename sessions without leaving the TUI
+- **Expandable Details** — View metadata like window count, pane commands, uptime, and attachment status
+- **Fuzzy Filtering** — Quickly filter sessions by name or path
+
+## Screenshot
+
+![CCM Screenshot](docs/images/screenshot.png)
+
+**Status indicators:**
+- `●` — Working: Claude is actively processing
+- `○` — Idle: Ready for input
+- `◐` — Waiting for input: Permission prompt (`[y/n]`)
+- `?` — Unknown: Not a Claude Code session or status unclear
 
 ## Installation
 
-To use the executable, add the following line to your tmux configuration file:
-```
-bind-key C-c display-popup -E -w 80 -h 20 "~/repositories/ccm/target/release/ccm"
+### Build from source
+
+```bash
+git clone https://github.com/nielsgroen/ccm.git
+cd ccm
+cargo build --release
 ```
 
-Now, you can use `ctrl-B, ctrl-C` to open the Claude Code Manager.
+### tmux Integration
+
+Add this to your `~/.tmux.conf` to bind CCM to a key:
+
+```bash
+bind-key C-c display-popup -E -w 80 -h 24 "/path/to/ccm"
+```
+
+Options:
+- `-E` — Close popup when CCM exits
+- `-w 80 -h 24` — Popup dimensions (adjust to preference)
+
+Now press `Ctrl-b, Ctrl-c` to open CCM from any tmux session.
+
+## Keybindings
+
+### Navigation
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move selection down |
+| `k` / `↑` | Move selection up |
+| `l` / `→` | Expand session details |
+| `h` / `←` | Collapse session details |
+| `Enter` | Switch to selected session |
+
+### Actions
+
+| Key | Action |
+|-----|--------|
+| `n` | Create new session |
+| `K` | Kill selected session (with confirmation) |
+| `r` | Rename selected session |
+| `/` | Filter sessions by name/path |
+| `Ctrl+c` | Clear filter |
+| `R` | Refresh session list |
+
+### Other
+
+| Key | Action |
+|-----|--------|
+| `?` | Show help |
+| `q` / `Esc` | Quit |
+
+## Status Detection
+
+CCM detects Claude Code status by analyzing pane content:
+
+| Pattern | Status |
+|---------|--------|
+| Input prompt (`❯`) with border above + "ctrl+c to interrupt" | Working |
+| Input prompt (`❯`) with border above, no interrupt message | Idle |
+| Contains `[y/n]` or `[Y/n]` | Waiting for input |
+| Otherwise | Unknown |
+
+## Session Model
+
+CCM identifies sessions containing Claude Code by looking for panes running the `claude` command. The displayed working directory and preview come from the Claude Code pane when present, otherwise from the first pane.
+
+Sessions are sorted with attached sessions first, then alphabetically by name.
+
+## Dependencies
+
+- [ratatui](https://ratatui.rs/) — Terminal UI framework
+- [crossterm](https://github.com/crossterm-rs/crossterm) — Terminal manipulation
+- [ansi-to-tui](https://github.com/uttarayan21/ansi-to-tui) — ANSI escape sequence rendering
+- [anyhow](https://github.com/dtolnay/anyhow) — Error handling
+- [dirs](https://github.com/dirs-dev/dirs-rs) — Home directory resolution
+- [unicode-width](https://github.com/unicode-rs/unicode-width) — Text alignment
+
+## Project Structure
+
+```
+ccm/
+├── Cargo.toml
+├── src/
+│   ├── main.rs        # Entry point, terminal setup
+│   ├── app.rs         # Application state machine
+│   ├── ui.rs          # Ratatui rendering
+│   ├── tmux.rs        # tmux command wrapper
+│   ├── session.rs     # Session/Pane data structures
+│   ├── detection.rs   # Claude Code status detection
+│   └── input.rs       # Keyboard event handling
+└── README.md
+```
+
+## License
+
+MIT
