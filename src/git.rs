@@ -563,81 +563,54 @@ impl GitContext {
         Ok(())
     }
 
-    /// Delete the worktree at the given path
+    /// Delete the worktree at the given path using `git worktree remove`
     /// Returns an error if the worktree has uncommitted changes (unless force=true)
     pub fn delete_worktree(worktree_path: &Path, force: bool) -> Result<()> {
-        let repo = Repository::discover(worktree_path).context("Failed to open repository")?;
+        use std::process::Command;
 
-        // We need to open the main repo to manage worktrees
-        let main_repo = if repo.is_worktree() {
-            Repository::open(repo.commondir()).context("Failed to open main repository")?
-        } else {
+        // Verify it's actually a worktree
+        let repo = Repository::discover(worktree_path).context("Failed to open repository")?;
+        if !repo.is_worktree() {
             anyhow::bail!(
                 "'{}' is not a worktree (it may be the main repository)",
                 worktree_path.display()
             );
-        };
-
-        // Find the worktree by path
-        let worktrees = main_repo.worktrees().context("Failed to list worktrees")?;
-        for name in worktrees.iter().flatten() {
-            let wt = match main_repo.find_worktree(name) {
-                Ok(wt) => wt,
-                Err(_) => continue,
-            };
-
-            if wt.path() == worktree_path {
-                // Check if the worktree is locked
-                if let Ok(git2::WorktreeLockStatus::Locked(_)) = wt.is_locked() {
-                    anyhow::bail!(
-                        "Worktree '{}' is locked. Unlock it first with: git worktree unlock {}",
-                        name,
-                        worktree_path.display()
-                    );
-                }
-
-                // Validate it's safe to delete (checks for uncommitted changes)
-                if !force {
-                    if let Err(e) = wt.validate() {
-                        anyhow::bail!(
-                            "Worktree '{}' cannot be deleted: {}. \
-                             Commit or stash your changes first.",
-                            name,
-                            e.message()
-                        );
-                    }
-                }
-
-                // Prune the worktree from git's tracking
-                let mut prune_opts = git2::WorktreePruneOptions::new();
-                if force {
-                    prune_opts.valid(true); // Prune even if valid
-                }
-                wt.prune(Some(&mut prune_opts)).with_context(|| {
-                    format!(
-                        "Failed to prune worktree '{}'. \
-                         It may have uncommitted changes or be in use.",
-                        name
-                    )
-                })?;
-
-                // Remove the directory from disk
-                std::fs::remove_dir_all(worktree_path).with_context(|| {
-                    format!(
-                        "Git pruned the worktree but failed to delete directory '{}'. \
-                         You may need to remove it manually.",
-                        worktree_path.display()
-                    )
-                })?;
-
-                return Ok(());
-            }
         }
 
-        anyhow::bail!(
-            "Worktree not found at '{}'. It may have already been removed.",
-            worktree_path.display()
-        )
+        // Use git CLI for worktree removal - run from the worktree itself
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(worktree_path);
+        cmd.arg("worktree").arg("remove");
+
+        if force {
+            cmd.arg("--force");
+        }
+
+        cmd.arg(worktree_path);
+
+        let output = cmd.output().context("Failed to execute git worktree remove")?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let hint = if stderr.contains("contains modified or untracked files") {
+                " Commit or stash your changes first, or use force delete."
+            } else if stderr.contains("is locked") {
+                &format!(
+                    " Unlock it first with: git worktree unlock {}",
+                    worktree_path.display()
+                )
+            } else {
+                ""
+            };
+
+            anyhow::bail!(
+                "git worktree remove failed: {}.{}",
+                stderr.trim(),
+                hint
+            )
+        }
     }
 }
 

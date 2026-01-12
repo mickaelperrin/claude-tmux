@@ -397,28 +397,28 @@ impl App {
             }
             SessionAction::KillAndDeleteWorktree => {
                 let worktree_path = session.working_directory.clone();
-                // First kill the session
-                match Tmux::kill_session(&session_name) {
+                // First delete the worktree (while session still provides git context)
+                match GitContext::delete_worktree(&worktree_path, false) {
                     Ok(_) => {
-                        // Then delete the worktree
-                        match GitContext::delete_worktree(&worktree_path, false) {
+                        // Then kill the session
+                        match Tmux::kill_session(&session_name) {
                             Ok(_) => {
                                 self.refresh_sessions();
                                 self.message = Some(format!(
-                                    "Killed session '{}' and deleted worktree",
+                                    "Deleted worktree and killed session '{}'",
                                     session_name
                                 ));
                             }
                             Err(e) => {
                                 self.refresh_sessions();
                                 self.error = Some(format!(
-                                    "Session killed but worktree deletion failed: {}",
+                                    "Worktree deleted but failed to kill session: {}",
                                     e
                                 ));
                             }
                         }
                     }
-                    Err(e) => self.error = Some(format!("Failed to kill session: {}", e)),
+                    Err(e) => self.error = Some(format!("Failed to delete worktree: {}", e)),
                 }
                 self.mode = Mode::Normal;
             }
