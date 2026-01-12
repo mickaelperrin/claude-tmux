@@ -119,7 +119,3 @@ claude-tmux/
 │   └── input.rs       # Keyboard event handling
 └── README.md
 ```
-
-## License
-
-MIT
