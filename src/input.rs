@@ -9,8 +9,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 
     match &app.mode {
         Mode::Normal => handle_normal_mode(app, key),
+        Mode::ActionMenu => handle_action_menu_mode(app, key),
         Mode::Filter { .. } => handle_filter_mode(app, key),
-        Mode::ConfirmKill { .. } => handle_confirm_kill_mode(app, key),
+        Mode::ConfirmAction => handle_confirm_action_mode(app, key),
         Mode::NewSession { .. } => handle_new_session_mode(app, key),
         Mode::Rename { .. } => handle_rename_mode(app, key),
         Mode::Help => handle_help_mode(app, key),
@@ -32,15 +33,12 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.select_prev();
         }
 
-        // Expand/collapse details
+        // Enter action menu
         KeyCode::Char('l') | KeyCode::Right => {
-            app.expand_details();
-        }
-        KeyCode::Char('h') | KeyCode::Left => {
-            app.collapse_details();
+            app.enter_action_menu();
         }
 
-        // Switch to session
+        // Switch to session (quick action)
         KeyCode::Enter => {
             app.switch_to_selected();
         }
@@ -106,10 +104,39 @@ fn handle_filter_mode(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_confirm_kill_mode(app: &mut App, key: KeyEvent) {
+fn handle_action_menu_mode(app: &mut App, key: KeyEvent) {
+    match key.code {
+        // Navigate actions
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.select_next_action();
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.select_prev_action();
+        }
+
+        // Execute selected action
+        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+            app.execute_selected_action();
+        }
+
+        // Back to session list
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
+            app.cancel();
+        }
+
+        // Quit entirely
+        KeyCode::Char('q') => {
+            app.should_quit = true;
+        }
+
+        _ => {}
+    }
+}
+
+fn handle_confirm_action_mode(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-            app.confirm_kill();
+            app.confirm_action();
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             app.cancel();

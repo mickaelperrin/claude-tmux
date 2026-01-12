@@ -13,6 +13,10 @@ pub struct GitContext {
     pub is_worktree: bool,
     /// Path to the main repository (if this is a worktree)
     pub main_repo_path: Option<PathBuf>,
+    /// Commits ahead of upstream
+    pub ahead: usize,
+    /// Commits behind upstream
+    pub behind: usize,
 }
 
 impl GitContext {
@@ -60,12 +64,34 @@ impl GitContext {
             None
         };
 
+        // Check ahead/behind upstream
+        let (ahead, behind) = Self::get_ahead_behind(&repo).unwrap_or((0, 0));
+
         Some(GitContext {
             branch,
             is_dirty,
             is_worktree,
             main_repo_path,
+            ahead,
+            behind,
         })
+    }
+
+    /// Get the number of commits ahead/behind the upstream branch
+    fn get_ahead_behind(repo: &Repository) -> Option<(usize, usize)> {
+        let head = repo.head().ok()?;
+        if !head.is_branch() {
+            return None; // Detached HEAD has no upstream
+        }
+
+        let branch_name = head.shorthand()?;
+        let local_branch = repo.find_branch(branch_name, git2::BranchType::Local).ok()?;
+        let upstream = local_branch.upstream().ok()?;
+
+        let local_oid = head.target()?;
+        let upstream_oid = upstream.get().target()?;
+
+        repo.graph_ahead_behind(local_oid, upstream_oid).ok()
     }
 }
 

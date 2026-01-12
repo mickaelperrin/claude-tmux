@@ -10,16 +10,48 @@ use crate::tmux::Tmux;
 pub enum Mode {
     /// Normal browsing mode
     Normal,
+    /// Viewing actions for selected session
+    ActionMenu,
     /// Filtering sessions with search input
     Filter { input: String },
-    /// Confirming session deletion
-    ConfirmKill { session_name: String },
+    /// Confirming an action (kill, etc.)
+    ConfirmAction,
     /// Creating a new session
     NewSession { name: String, path: String, field: NewSessionField },
     /// Renaming a session
     Rename { old_name: String, new_name: String },
     /// Showing help
     Help,
+}
+
+/// An action that can be performed on a session
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionAction {
+    /// Switch to this session
+    SwitchTo,
+    /// Rename this session
+    Rename,
+    /// Kill this session
+    Kill,
+    /// Kill session and delete its worktree
+    KillAndDeleteWorktree,
+}
+
+impl SessionAction {
+    /// Returns the display label for this action
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::SwitchTo => "Switch to session",
+            Self::Rename => "Rename session",
+            Self::Kill => "Kill session",
+            Self::KillAndDeleteWorktree => "Kill session + delete worktree",
+        }
+    }
+
+    /// Whether this action requires confirmation
+    pub fn requires_confirmation(&self) -> bool {
+        matches!(self, Self::Kill | Self::KillAndDeleteWorktree)
+    }
 }
 
 /// Which field is active in the new session dialog
@@ -49,8 +81,12 @@ pub struct App {
     pub message: Option<String>,
     /// Cached preview content for the selected session's pane
     pub preview_content: Option<String>,
-    /// Whether details for the selected session are expanded
-    pub details_expanded: bool,
+    /// Available actions for the selected session (computed when entering action menu)
+    pub available_actions: Vec<SessionAction>,
+    /// Currently highlighted action in ActionMenu mode
+    pub selected_action: usize,
+    /// Action pending confirmation
+    pub pending_action: Option<SessionAction>,
 }
 
 impl App {
@@ -69,7 +105,9 @@ impl App {
             error: None,
             message: None,
             preview_content: None,
-            details_expanded: false,
+            available_actions: Vec::new(),
+            selected_action: 0,
+            pending_action: None,
         };
 
         app.update_preview();
@@ -175,31 +213,65 @@ impl App {
         }
     }
 
-    /// Start the kill confirmation flow
+    /// Start the kill confirmation flow (direct kill without action menu)
     pub fn start_kill(&mut self) {
         self.clear_messages();
-        if let Some(session) = self.selected_session() {
-            self.mode = Mode::ConfirmKill {
-                session_name: session.name.clone(),
-            };
+        if self.selected_session().is_some() {
+            self.pending_action = Some(SessionAction::Kill);
+            self.mode = Mode::ConfirmAction;
         }
     }
 
-    /// Confirm and execute session kill
-    pub fn confirm_kill(&mut self) {
-        if let Mode::ConfirmKill { ref session_name } = self.mode {
-            let name = session_name.clone();
-            match Tmux::kill_session(&name) {
-                Ok(_) => {
-                    self.message = Some(format!("Killed session '{}'", name));
-                    self.refresh();
+    /// Confirm and execute the pending action
+    pub fn confirm_action(&mut self) {
+        if let Some(action) = self.pending_action.take() {
+            self.execute_action(action);
+        }
+        self.mode = Mode::Normal;
+    }
+
+    /// Execute an action on the selected session
+    fn execute_action(&mut self, action: SessionAction) {
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        let session_name = session.name.clone();
+
+        match action {
+            SessionAction::SwitchTo => {
+                match Tmux::switch_to_session(&session_name) {
+                    Ok(_) => self.should_quit = true,
+                    Err(e) => self.error = Some(format!("Failed to switch: {}", e)),
                 }
-                Err(e) => {
-                    self.error = Some(format!("Failed to kill: {}", e));
+            }
+            SessionAction::Rename => {
+                // Enter rename mode
+                self.mode = Mode::Rename {
+                    old_name: session_name.clone(),
+                    new_name: session_name,
+                };
+                return; // Don't reset mode to Normal
+            }
+            SessionAction::Kill => {
+                match Tmux::kill_session(&session_name) {
+                    Ok(_) => {
+                        self.message = Some(format!("Killed session '{}'", session_name));
+                        self.refresh();
+                    }
+                    Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
+                }
+            }
+            SessionAction::KillAndDeleteWorktree => {
+                // For now, just kill the session (worktree deletion is Stage 3)
+                match Tmux::kill_session(&session_name) {
+                    Ok(_) => {
+                        self.message = Some(format!("Killed session '{}' (worktree deletion not yet implemented)", session_name));
+                        self.refresh();
+                    }
+                    Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
                 }
             }
         }
-        self.mode = Mode::Normal;
     }
 
     /// Start the rename flow
@@ -314,18 +386,73 @@ impl App {
         self.mode = Mode::Help;
     }
 
-    /// Expand the details panel for the selected session
-    pub fn expand_details(&mut self) {
-        self.details_expanded = true;
+    /// Compute available actions for the selected session
+    fn compute_actions(&mut self) {
+        let Some(session) = self.selected_session() else {
+            self.available_actions = vec![];
+            return;
+        };
+
+        let mut actions = vec![
+            SessionAction::SwitchTo,
+            SessionAction::Rename,
+            SessionAction::Kill,
+        ];
+
+        // Add worktree deletion option if this is a worktree
+        if let Some(ref git) = session.git_context {
+            if git.is_worktree {
+                actions.push(SessionAction::KillAndDeleteWorktree);
+            }
+        }
+
+        self.available_actions = actions;
+        self.selected_action = 0;
     }
 
-    /// Collapse the details panel
-    pub fn collapse_details(&mut self) {
-        self.details_expanded = false;
+    /// Enter the action menu for the selected session
+    pub fn enter_action_menu(&mut self) {
+        self.clear_messages();
+        if self.selected_session().is_some() {
+            self.compute_actions();
+            self.mode = Mode::ActionMenu;
+        }
+    }
+
+    /// Move to next action in the action menu
+    pub fn select_next_action(&mut self) {
+        if !self.available_actions.is_empty() {
+            self.selected_action = (self.selected_action + 1) % self.available_actions.len();
+        }
+    }
+
+    /// Move to previous action in the action menu
+    pub fn select_prev_action(&mut self) {
+        if !self.available_actions.is_empty() {
+            if self.selected_action == 0 {
+                self.selected_action = self.available_actions.len() - 1;
+            } else {
+                self.selected_action -= 1;
+            }
+        }
+    }
+
+    /// Execute the currently selected action from the action menu
+    pub fn execute_selected_action(&mut self) {
+        if let Some(action) = self.available_actions.get(self.selected_action).cloned() {
+            if action.requires_confirmation() {
+                self.pending_action = Some(action);
+                self.mode = Mode::ConfirmAction;
+            } else {
+                self.execute_action(action);
+                self.mode = Mode::Normal;
+            }
+        }
     }
 
     /// Cancel current mode and return to normal
     pub fn cancel(&mut self) {
+        self.pending_action = None;
         self.mode = Mode::Normal;
     }
 

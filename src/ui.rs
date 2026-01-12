@@ -37,8 +37,8 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Render modal overlays
     match &app.mode {
-        Mode::ConfirmKill { session_name } => {
-            render_confirm_kill(frame, session_name);
+        Mode::ConfirmAction => {
+            render_confirm_action(frame, app);
         }
         Mode::NewSession { name, path, field } => {
             render_new_session_dialog(frame, name, path, *field);
@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Mode::Help => {
             render_help(frame);
         }
-        Mode::Normal => {}
+        Mode::Normal | Mode::ActionMenu => {}
     }
 
     // Render error/message overlay
@@ -111,9 +111,10 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             .as_ref()
             .is_some_and(|c| c == &session.name);
 
-        // Marker changes based on expanded state
+        // Show ▾ when action menu is open for this session, ▸ when selected but collapsed
+        let is_expanded = is_selected && matches!(app.mode, Mode::ActionMenu);
         let marker = if is_selected {
-            if app.details_expanded { "▾" } else { "▸" }
+            if is_expanded { "▾" } else { "▸" }
         } else {
             " "
         };
@@ -195,12 +196,12 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
 
         items.push(ListItem::new(line).style(style));
 
-        // Add metadata rows if this session is selected and expanded
-        if is_selected && app.details_expanded {
-            let value_style = Style::default().fg(Color::White).bg(Color::DarkGray);
-            let label_style = Style::default().fg(Color::Cyan).bg(Color::DarkGray);
+        // Show expanded content when in action menu mode for this session
+        if is_expanded {
+            let label_style = Style::default().fg(Color::DarkGray);
+            let value_style = Style::default().fg(Color::White);
 
-            // Build metadata line with windows, panes, duration, attached
+            // Session metadata row
             let attached_str = if session.attached { "yes" } else { "no" };
             let pane_count = session.panes.len();
 
@@ -218,25 +219,80 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("attached: ", label_style),
                 Span::styled(attached_str, value_style),
             ]);
+            items.push(ListItem::new(meta_line));
 
-            items.push(ListItem::new(meta_line).style(Style::default().bg(Color::DarkGray)));
-
-            // Show pane commands if there are multiple panes
-            if pane_count > 1 {
-                let pane_commands: Vec<String> = session
-                    .panes
-                    .iter()
-                    .map(|p| p.current_command.clone())
-                    .collect();
-
-                let panes_line = Line::from(vec![
+            // Git metadata row (if available)
+            if let Some(ref git) = session.git_context {
+                let mut git_spans = vec![
                     Span::raw("     "),
-                    Span::styled("pane cmds: ", label_style),
-                    Span::styled(pane_commands.join(", "), value_style),
-                ]);
+                    Span::styled("branch: ", label_style),
+                    Span::styled(&git.branch, Style::default().fg(Color::Cyan)),
+                ];
 
-                items.push(ListItem::new(panes_line).style(Style::default().bg(Color::DarkGray)));
+                if git.ahead > 0 || git.behind > 0 {
+                    git_spans.push(Span::raw("  "));
+                    if git.ahead > 0 {
+                        git_spans.push(Span::styled(
+                            format!("↑{}", git.ahead),
+                            Style::default().fg(Color::Green),
+                        ));
+                    }
+                    if git.behind > 0 {
+                        if git.ahead > 0 {
+                            git_spans.push(Span::raw(" "));
+                        }
+                        git_spans.push(Span::styled(
+                            format!("↓{}", git.behind),
+                            Style::default().fg(Color::Red),
+                        ));
+                    }
+                }
+
+                if git.is_dirty {
+                    git_spans.push(Span::raw("  "));
+                    git_spans.push(Span::styled("dirty: ", label_style));
+                    git_spans.push(Span::styled("yes", Style::default().fg(Color::Yellow)));
+                }
+
+                if git.is_worktree {
+                    git_spans.push(Span::raw("  "));
+                    git_spans.push(Span::styled("worktree: ", label_style));
+                    git_spans.push(Span::styled("yes", Style::default().fg(Color::Magenta)));
+                }
+
+                items.push(ListItem::new(Line::from(git_spans)));
             }
+
+            // Separator
+            let sep_line = Line::from(Span::styled(
+                "     ────────────────────────",
+                Style::default().fg(Color::DarkGray),
+            ));
+            items.push(ListItem::new(sep_line));
+
+            // Action items
+            for (action_idx, action) in app.available_actions.iter().enumerate() {
+                let is_action_selected = action_idx == app.selected_action;
+                let action_marker = if is_action_selected { "▸" } else { " " };
+                let action_style = if is_action_selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let action_line = Line::from(vec![
+                    Span::raw("     "),
+                    Span::styled(format!("{} {}", action_marker, action.label()), action_style),
+                ]);
+                items.push(ListItem::new(action_line));
+            }
+
+            // White separator at end of submenu
+            let end_sep = Line::from(Span::styled(
+                "",
+                Style::default().fg(Color::White),
+            ));
+            items.push(ListItem::new(end_sep));
         }
     }
 
@@ -336,9 +392,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
-        Mode::Normal => "  ? help  jk navigate  hl expand/collapse  ⏎ switch  n new  K kill  r rename  / filter  q quit",
+        Mode::Normal => "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  r rename  / filter  q quit",
+        Mode::ActionMenu => "  jk navigate  ⏎/l select  h/esc back  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",
-        Mode::ConfirmKill { .. } => "  ⏎/y confirm  n/esc cancel",
+        Mode::ConfirmAction => "  y/⏎ confirm  n/esc cancel",
         Mode::NewSession { .. } => "  ⏎ create  tab switch field  esc cancel",
         Mode::Rename { .. } => "  ⏎ confirm  esc cancel",
         Mode::Help => "  q close",
@@ -356,15 +413,26 @@ fn render_filter_bar(frame: &mut Frame, input: &str, area: Rect) {
     frame.render_widget(bar, area);
 }
 
-fn render_confirm_kill(frame: &mut Frame, session_name: &str) {
+fn render_confirm_action(frame: &mut Frame, app: &App) {
+    let session_name = app
+        .selected_session()
+        .map(|s| s.name.as_str())
+        .unwrap_or("?");
+
+    let action_desc = app
+        .pending_action
+        .as_ref()
+        .map(|a| a.label())
+        .unwrap_or("Perform action");
+
     let area = centered_rect(50, 5, frame.area());
 
     let block = Block::default()
-        .title(" Kill Session ")
+        .title(" Confirm ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red));
 
-    let text = format!("Kill session '{}'?\n\n[Y]es  [n]o", session_name);
+    let text = format!("{} '{}'?\n\n[Y]es  [n]o", action_desc, session_name);
     let paragraph = Paragraph::new(text)
         .block(block)
         .alignment(Alignment::Center)
@@ -459,7 +527,7 @@ fn render_rename_dialog(frame: &mut Frame, old_name: &str, new_name: &str) {
 }
 
 fn render_help(frame: &mut Frame) {
-    let area = centered_rect(60, 18, frame.area());
+    let area = centered_rect(60, 21, frame.area());
 
     let block = Block::default()
         .title(" Help ")
@@ -473,8 +541,7 @@ fn render_help(frame: &mut Frame) {
         )),
         Line::raw("  j / ↓       Move down"),
         Line::raw("  k / ↑       Move up"),
-        Line::raw("  l / →       Expand details"),
-        Line::raw("  h / ←       Collapse details"),
+        Line::raw("  l / →       Open action menu"),
         Line::raw("  Enter       Switch to session"),
         Line::raw(""),
         Line::from(Span::styled(
@@ -486,6 +553,13 @@ fn render_help(frame: &mut Frame) {
         Line::raw("  r           Rename session"),
         Line::raw("  /           Filter sessions"),
         Line::raw("  R           Refresh list"),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Action Menu",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::raw("  h / ←       Go back"),
+        Line::raw("  Enter       Execute action"),
         Line::raw(""),
         Line::from(Span::styled(
             "Other",
