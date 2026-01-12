@@ -4,6 +4,14 @@ A terminal user interface for managing multiple Claude Code sessions within tmux
 
 ## Installation
 
+### Cargo install
+
+Just run:
+
+```bash
+cargo install claude-tmux
+```
+
 ### Build from source
 
 ```bash
