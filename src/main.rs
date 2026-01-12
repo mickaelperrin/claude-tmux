@@ -1,5 +1,6 @@
 mod app;
 mod detection;
+mod git;
 mod input;
 mod session;
 mod tmux;

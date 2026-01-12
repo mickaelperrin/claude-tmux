@@ -4,6 +4,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use crate::detection::detect_status;
+use crate::git::GitContext;
 use crate::session::{Pane, Session};
 
 /// Wrapper for tmux command execution
@@ -56,6 +57,9 @@ impl Tmux {
                         .unwrap_or_default()
                 });
 
+                // Detect git context for the working directory
+                let git_context = GitContext::detect(&working_directory);
+
                 sessions.push(Session {
                     name,
                     created,
@@ -65,6 +69,7 @@ impl Tmux {
                     panes,
                     claude_code_pane,
                     claude_code_status,
+                    git_context,
                 });
             }
         }

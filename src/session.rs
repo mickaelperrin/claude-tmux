@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::git::GitContext;
+
 /// Status of a Claude Code instance in a pane
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClaudeCodeStatus {
@@ -67,6 +69,8 @@ pub struct Session {
     pub claude_code_pane: Option<String>,
     /// Status of Claude Code in this session
     pub claude_code_status: ClaudeCodeStatus,
+    /// Git context, if the working directory is a git repository
+    pub git_context: Option<GitContext>,
 }
 
 impl Session {

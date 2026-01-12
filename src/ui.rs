@@ -137,7 +137,37 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             Style::default()
         };
 
-        let line = Line::from(vec![
+        // Build git info spans
+        let git_spans = if let Some(ref git) = session.git_context {
+            let (open, close) = if git.is_worktree {
+                ("[", "]")
+            } else {
+                ("(", ")")
+            };
+            let bracket_color = if git.is_worktree {
+                Color::Magenta
+            } else {
+                Color::Cyan
+            };
+            let dirty_span = if git.is_dirty {
+                vec![Span::styled(" *", Style::default().fg(Color::Yellow))]
+            } else {
+                vec![]
+            };
+
+            let mut spans = vec![
+                Span::raw(" "),
+                Span::styled(open, Style::default().fg(bracket_color)),
+                Span::styled(&git.branch, Style::default().fg(Color::Cyan)),
+                Span::styled(close, Style::default().fg(bracket_color)),
+            ];
+            spans.extend(dirty_span);
+            spans
+        } else {
+            vec![]
+        };
+
+        let mut line_spans = vec![
             Span::raw(format!(" {} ", marker)),
             Span::styled(
                 format!("{:<width$}", session.name, width = max_name_len),
@@ -152,7 +182,10 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("  "),
             Span::styled(session.display_path(), Style::default().fg(path_color)),
-        ]);
+        ];
+        line_spans.extend(git_spans);
+
+        let line = Line::from(line_spans);
 
         let style = if is_selected {
             Style::default().bg(Color::DarkGray)
