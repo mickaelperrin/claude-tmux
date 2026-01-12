@@ -3,12 +3,11 @@ name = "claude-tmux"
 version = "0.1.0"
 edition = "2021"
 description = "TUI for managing Claude Code tmux sessions"
-license = "MIT"
-
-[dependencies]
-ratatui = "0.29"
-crossterm = "0.28"
-anyhow = "1.0"
-dirs = "5.0"
-unicode-width = "0.2"
-ansi-to-tui = "7.0"
+license = "AGPL-3.0-only"
+authors = ["Niels Groeneveld"]
+repository = "https://github.com/nielsgroen/claude-tmux"
+homepage = "https://github.com/nielsgroen/claude-tmux"
+readme = "README.md"
+keywords = ["tmux", "cli", "tui", "claude", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [".claude/", "docs/", ".github/"]
