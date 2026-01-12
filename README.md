@@ -17,12 +17,18 @@ cargo build --release
 Add this to your `~/.tmux.conf` to bind claude-tmux to a key:
 
 ```bash
-bind-key C-c display-popup -E -w 80 -h 24 "/path/to/claude-tmux"
+bind-key C-c display-popup -E -w 80 -h 30 "/path/to/claude-tmux"
+```
+
+If you used `cargo install claude-tmux`:
+
+```bash
+bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/claude-tmux"
 ```
 
 Options:
 - `-E` — Close popup when claude-tmux exits
-- `-w 80 -h 24` — Popup dimensions (adjust to preference)
+- `-w 80 -h 30` — Popup dimensions (adjust to preference)
 
 Now press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
 
@@ -36,7 +42,9 @@ Now press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
 - **Expandable Details** — View metadata like window count, pane commands, uptime, and attachment status
 - **Fuzzy Filtering** — Quickly filter sessions by name or path
 
-## Screenshot
+## Screenshots
+
+View the screenshots at [GitHub](https://github.com/nielsgroen/claude-tmux).
 
 <img src="docs/images/screenshot.png" alt="claude-tmux Screenshot" width="400">
 
