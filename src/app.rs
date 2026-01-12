@@ -23,6 +23,23 @@ pub enum Mode {
     Rename { old_name: String, new_name: String },
     /// Entering commit message
     Commit { message: String },
+    /// Creating a new session from a worktree
+    NewWorktree {
+        /// The source repository path (from selected session)
+        source_repo: PathBuf,
+        /// All branches in the repository
+        all_branches: Vec<String>,
+        /// Branch name input (may be new or existing)
+        branch_input: String,
+        /// Selected index in filtered branches (None = creating new branch)
+        selected_branch: Option<usize>,
+        /// Worktree path
+        worktree_path: String,
+        /// Session name
+        session_name: String,
+        /// Which field is active
+        field: NewWorktreeField,
+    },
     /// Showing help
     Help,
 }
@@ -34,6 +51,8 @@ pub enum SessionAction {
     SwitchTo,
     /// Rename this session
     Rename,
+    /// Create a new session from a worktree
+    NewWorktree,
     /// Stage all changes
     Stage,
     /// Commit staged changes
@@ -56,6 +75,7 @@ impl SessionAction {
         match self {
             Self::SwitchTo => "Switch to session",
             Self::Rename => "Rename session",
+            Self::NewWorktree => "New session from worktree",
             Self::Stage => "Stage all changes",
             Self::Commit => "Commit staged changes",
             Self::Push => "Push to remote",
@@ -77,6 +97,14 @@ impl SessionAction {
 pub enum NewSessionField {
     Name,
     Path,
+}
+
+/// Which field is active in the new worktree dialog
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewWorktreeField {
+    Branch,
+    Path,
+    SessionName,
 }
 
 /// Main application state
@@ -363,14 +391,34 @@ impl App {
                 }
                 self.mode = Mode::Normal;
             }
+            SessionAction::NewWorktree => {
+                // Enter new worktree mode
+                self.start_new_worktree();
+            }
             SessionAction::KillAndDeleteWorktree => {
-                // For now, just kill the session (worktree deletion is Stage 3)
+                let worktree_path = session.working_directory.clone();
+                // First kill the session
                 match Tmux::kill_session(&session_name) {
                     Ok(_) => {
-                        self.refresh_sessions();
-                        self.message = Some(format!("Killed session '{}' (worktree deletion not yet implemented)", session_name));
+                        // Then delete the worktree
+                        match GitContext::delete_worktree(&worktree_path, false) {
+                            Ok(_) => {
+                                self.refresh_sessions();
+                                self.message = Some(format!(
+                                    "Killed session '{}' and deleted worktree",
+                                    session_name
+                                ));
+                            }
+                            Err(e) => {
+                                self.refresh_sessions();
+                                self.error = Some(format!(
+                                    "Session killed but worktree deletion failed: {}",
+                                    e
+                                ));
+                            }
+                        }
                     }
-                    Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
+                    Err(e) => self.error = Some(format!("Failed to kill session: {}", e)),
                 }
                 self.mode = Mode::Normal;
             }
@@ -459,6 +507,222 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    /// Start the new worktree flow
+    pub fn start_new_worktree(&mut self) {
+        self.clear_messages();
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+
+        // Get the repo path (use main repo if this is a worktree)
+        let source_repo = if let Some(ref git) = session.git_context {
+            if git.is_worktree {
+                git.main_repo_path
+                    .clone()
+                    .unwrap_or_else(|| session.working_directory.clone())
+            } else {
+                session.working_directory.clone()
+            }
+        } else {
+            return; // Not a git repo
+        };
+
+        // Get list of branches
+        let all_branches = match GitContext::list_branches(&source_repo) {
+            Ok(branches) => branches,
+            Err(e) => {
+                self.error = Some(format!("Failed to list branches: {}", e));
+                return;
+            }
+        };
+
+        self.mode = Mode::NewWorktree {
+            source_repo,
+            all_branches,
+            branch_input: String::new(),
+            selected_branch: None,
+            worktree_path: String::new(),
+            session_name: String::new(),
+            field: NewWorktreeField::Branch,
+        };
+    }
+
+    /// Get filtered branches based on current input
+    pub fn filtered_branches(&self) -> Vec<&str> {
+        if let Mode::NewWorktree {
+            ref all_branches,
+            ref branch_input,
+            ..
+        } = self.mode
+        {
+            if branch_input.is_empty() {
+                all_branches.iter().map(|s| s.as_str()).collect()
+            } else {
+                let input_lower = branch_input.to_lowercase();
+                all_branches
+                    .iter()
+                    .filter(|b| b.to_lowercase().contains(&input_lower))
+                    .map(|s| s.as_str())
+                    .collect()
+            }
+        } else {
+            vec![]
+        }
+    }
+
+    /// Update suggestions when branch input changes
+    pub fn update_worktree_suggestions(&mut self) {
+        if let Mode::NewWorktree {
+            ref source_repo,
+            ref all_branches,
+            ref branch_input,
+            ref mut selected_branch,
+            ref mut worktree_path,
+            ref mut session_name,
+            ..
+        } = self.mode
+        {
+            // Filter branches
+            let filtered: Vec<&str> = if branch_input.is_empty() {
+                all_branches.iter().map(|s| s.as_str()).collect()
+            } else {
+                let input_lower = branch_input.to_lowercase();
+                all_branches
+                    .iter()
+                    .filter(|b| b.to_lowercase().contains(&input_lower))
+                    .map(|s| s.as_str())
+                    .collect()
+            };
+
+            // Update selected branch
+            if filtered.is_empty() {
+                *selected_branch = None;
+            } else if let Some(idx) = *selected_branch {
+                if idx >= filtered.len() {
+                    *selected_branch = Some(filtered.len() - 1);
+                }
+            }
+
+            // Auto-update path and session name based on branch input
+            let branch_for_path = if let Some(idx) = *selected_branch {
+                filtered.get(idx).copied().unwrap_or(branch_input.as_str())
+            } else {
+                branch_input.as_str()
+            };
+
+            if !branch_for_path.is_empty() {
+                *worktree_path = default_worktree_path(source_repo, branch_for_path)
+                    .to_string_lossy()
+                    .to_string();
+                // Session name: repo-name + branch suffix
+                let repo_name = source_repo
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("repo");
+                let branch_suffix = sanitize_for_session_name(branch_for_path);
+                *session_name = format!("{}-{}", repo_name, branch_suffix);
+            }
+        }
+    }
+
+    /// Create the new worktree and session
+    pub fn confirm_new_worktree(&mut self) {
+        let (source_repo, all_branches, branch_input, selected_branch, worktree_path, session_name) =
+            if let Mode::NewWorktree {
+                ref source_repo,
+                ref all_branches,
+                ref branch_input,
+                selected_branch,
+                ref worktree_path,
+                ref session_name,
+                ..
+            } = self.mode
+            {
+                (
+                    source_repo.clone(),
+                    all_branches.clone(),
+                    branch_input.clone(),
+                    selected_branch,
+                    worktree_path.clone(),
+                    session_name.clone(),
+                )
+            } else {
+                return;
+            };
+
+        // Validate inputs
+        if branch_input.is_empty() && selected_branch.is_none() {
+            self.error = Some("Branch name cannot be empty".to_string());
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        if session_name.is_empty() {
+            self.error = Some("Session name cannot be empty".to_string());
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        if worktree_path.is_empty() {
+            self.error = Some("Worktree path cannot be empty".to_string());
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        // Determine if this is a new branch or existing
+        let filtered: Vec<&str> = if branch_input.is_empty() {
+            all_branches.iter().map(|s| s.as_str()).collect()
+        } else {
+            let input_lower = branch_input.to_lowercase();
+            all_branches
+                .iter()
+                .filter(|b| b.to_lowercase().contains(&input_lower))
+                .map(|s| s.as_str())
+                .collect()
+        };
+
+        let (branch_name, is_new_branch) = if let Some(idx) = selected_branch {
+            // User selected an existing branch
+            (filtered.get(idx).copied().unwrap_or(&branch_input).to_string(), false)
+        } else if all_branches.iter().any(|b| b == &branch_input) {
+            // Exact match with existing branch
+            (branch_input.clone(), false)
+        } else {
+            // New branch
+            (branch_input.clone(), true)
+        };
+
+        let worktree_path_buf = expand_path(&worktree_path);
+
+        // Create the worktree
+        match GitContext::create_worktree(&source_repo, &worktree_path_buf, &branch_name, is_new_branch)
+        {
+            Ok(_) => {
+                // Create the session
+                match Tmux::new_session(&session_name, &worktree_path_buf, true) {
+                    Ok(_) => {
+                        self.refresh_sessions();
+                        self.message = Some(format!(
+                            "Created worktree '{}' and session '{}'",
+                            branch_name, session_name
+                        ));
+                    }
+                    Err(e) => {
+                        self.error = Some(format!(
+                            "Worktree created but session creation failed: {}",
+                            e
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                self.error = Some(format!("Failed to create worktree: {}", e));
+            }
+        }
+
+        self.mode = Mode::Normal;
+    }
+
     /// Start filter mode
     pub fn start_filter(&mut self) {
         self.clear_messages();
@@ -503,6 +767,9 @@ impl App {
 
         // Add git actions if applicable
         if let Some(ref git) = session.git_context {
+            // New worktree: available for any git repo
+            actions.push(SessionAction::NewWorktree);
+
             // Stage: if there are unstaged changes
             if git.has_unstaged {
                 actions.push(SessionAction::Stage);
@@ -610,9 +877,9 @@ impl App {
 
 /// Expand ~ to home directory in a path string
 fn expand_path(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
+    if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            return home.join(&path[2..]);
+            return home.join(stripped);
         }
     } else if path == "~" {
         if let Some(home) = dirs::home_dir() {
@@ -620,4 +887,26 @@ fn expand_path(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+/// Sanitize a branch name for use as a session name
+/// e.g., "feature/new-thing" -> "new-thing"
+fn sanitize_for_session_name(branch: &str) -> String {
+    branch
+        .rsplit('/')
+        .next()
+        .unwrap_or(branch)
+        .replace(['/', '\\', ' ', ':', '.'], "-")
+}
+
+/// Generate default worktree path from repo path and branch name
+/// e.g., ~/repos/project + feature/foo -> ~/repos/project-foo
+fn default_worktree_path(repo_path: &std::path::Path, branch: &str) -> PathBuf {
+    let parent = repo_path.parent().unwrap_or(repo_path);
+    let repo_name = repo_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("repo");
+    let branch_suffix = sanitize_for_session_name(branch);
+    parent.join(format!("{}-{}", repo_name, branch_suffix))
 }

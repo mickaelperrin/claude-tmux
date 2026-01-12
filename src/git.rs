@@ -447,6 +447,198 @@ impl GitContext {
 
         callbacks
     }
+
+    /// List all local branch names in the repository
+    pub fn list_branches(repo_path: &Path) -> Result<Vec<String>> {
+        let repo = Repository::discover(repo_path).context("Failed to open repository")?;
+        let mut branches = Vec::new();
+
+        for branch_result in repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = branch_result?;
+            if let Ok(Some(name)) = branch.name() {
+                branches.push(name.to_string());
+            }
+        }
+
+        // Sort with main/master first, then alphabetically
+        branches.sort_by(|a, b| {
+            let a_is_main = a == "main" || a == "master";
+            let b_is_main = b == "main" || b == "master";
+            match (a_is_main, b_is_main) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.cmp(b),
+            }
+        });
+
+        Ok(branches)
+    }
+
+    /// Create a new worktree for a branch
+    /// - If `is_new_branch` is true: creates a new branch from HEAD
+    /// - If `is_new_branch` is false: uses an existing branch
+    pub fn create_worktree(
+        repo_path: &Path,
+        worktree_path: &Path,
+        branch_name: &str,
+        is_new_branch: bool,
+    ) -> Result<()> {
+        let repo = Repository::discover(repo_path).context("Failed to open repository")?;
+
+        // Sanitize branch name for worktree name (remove slashes)
+        let worktree_name = branch_name.replace('/', "-");
+
+        // Check if worktree path already exists
+        if worktree_path.exists() {
+            anyhow::bail!(
+                "Path '{}' already exists",
+                worktree_path.display()
+            );
+        }
+
+        if is_new_branch {
+            // Create new branch from HEAD, then create worktree
+            let head = repo.head().context("Failed to get HEAD")?;
+            let commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
+
+            // Create the branch first
+            repo.branch(branch_name, &commit, false)
+                .with_context(|| format!("Failed to create branch '{}'", branch_name))?;
+
+            // Now create the worktree for this branch
+            let refname = format!("refs/heads/{}", branch_name);
+            let reference = repo
+                .find_reference(&refname)
+                .context("Failed to find created branch")?;
+
+            repo.worktree(
+                &worktree_name,
+                worktree_path,
+                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to create worktree for new branch '{}' at '{}'",
+                    branch_name,
+                    worktree_path.display()
+                )
+            })?;
+        } else {
+            // Branch exists - create worktree for existing branch
+            let refname = format!("refs/heads/{}", branch_name);
+            let reference = repo
+                .find_reference(&refname)
+                .with_context(|| format!("Branch '{}' not found", branch_name))?;
+
+            // Check if this branch is already checked out
+            if let Ok(head) = repo.head() {
+                if head.is_branch() {
+                    if let Some(head_name) = head.shorthand() {
+                        if head_name == branch_name {
+                            anyhow::bail!(
+                                "Branch '{}' is currently checked out in the main worktree. \
+                                 Create a new branch instead, or checkout a different branch first.",
+                                branch_name
+                            );
+                        }
+                    }
+                }
+            }
+
+            repo.worktree(
+                &worktree_name,
+                worktree_path,
+                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to create worktree for branch '{}' at '{}'. \
+                     The branch may already be checked out in another worktree.",
+                    branch_name,
+                    worktree_path.display()
+                )
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete the worktree at the given path
+    /// Returns an error if the worktree has uncommitted changes (unless force=true)
+    pub fn delete_worktree(worktree_path: &Path, force: bool) -> Result<()> {
+        let repo = Repository::discover(worktree_path).context("Failed to open repository")?;
+
+        // We need to open the main repo to manage worktrees
+        let main_repo = if repo.is_worktree() {
+            Repository::open(repo.commondir()).context("Failed to open main repository")?
+        } else {
+            anyhow::bail!(
+                "'{}' is not a worktree (it may be the main repository)",
+                worktree_path.display()
+            );
+        };
+
+        // Find the worktree by path
+        let worktrees = main_repo.worktrees().context("Failed to list worktrees")?;
+        for name in worktrees.iter().flatten() {
+            let wt = match main_repo.find_worktree(name) {
+                Ok(wt) => wt,
+                Err(_) => continue,
+            };
+
+            if wt.path() == worktree_path {
+                // Check if the worktree is locked
+                if let Ok(git2::WorktreeLockStatus::Locked(_)) = wt.is_locked() {
+                    anyhow::bail!(
+                        "Worktree '{}' is locked. Unlock it first with: git worktree unlock {}",
+                        name,
+                        worktree_path.display()
+                    );
+                }
+
+                // Validate it's safe to delete (checks for uncommitted changes)
+                if !force {
+                    if let Err(e) = wt.validate() {
+                        anyhow::bail!(
+                            "Worktree '{}' cannot be deleted: {}. \
+                             Commit or stash your changes first.",
+                            name,
+                            e.message()
+                        );
+                    }
+                }
+
+                // Prune the worktree from git's tracking
+                let mut prune_opts = git2::WorktreePruneOptions::new();
+                if force {
+                    prune_opts.valid(true); // Prune even if valid
+                }
+                wt.prune(Some(&mut prune_opts)).with_context(|| {
+                    format!(
+                        "Failed to prune worktree '{}'. \
+                         It may have uncommitted changes or be in use.",
+                        name
+                    )
+                })?;
+
+                // Remove the directory from disk
+                std::fs::remove_dir_all(worktree_path).with_context(|| {
+                    format!(
+                        "Git pruned the worktree but failed to delete directory '{}'. \
+                         You may need to remove it manually.",
+                        worktree_path.display()
+                    )
+                })?;
+
+                return Ok(());
+            }
+        }
+
+        anyhow::bail!(
+            "Worktree not found at '{}'. It may have already been removed.",
+            worktree_path.display()
+        )
+    }
 }
 
 #[cfg(test)]

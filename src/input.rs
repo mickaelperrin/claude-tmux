@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, Mode, NewSessionField};
+use crate::app::{App, Mode, NewSessionField, NewWorktreeField};
 
 /// Handle a key event and update the application state
 pub fn handle_key(app: &mut App, key: KeyEvent) {
@@ -15,6 +15,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::NewSession { .. } => handle_new_session_mode(app, key),
         Mode::Rename { .. } => handle_rename_mode(app, key),
         Mode::Commit { .. } => handle_commit_mode(app, key),
+        Mode::NewWorktree { .. } => handle_new_worktree_mode(app, key),
         Mode::Help => handle_help_mode(app, key),
     }
 }
@@ -245,6 +246,132 @@ fn handle_commit_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char(c) => {
             if let Mode::Commit { ref mut message } = app.mode {
                 message.push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
+    // Get current field to determine behavior
+    let current_field = if let Mode::NewWorktree { field, .. } = &app.mode {
+        *field
+    } else {
+        return;
+    };
+
+    match key.code {
+        KeyCode::Esc => {
+            app.cancel();
+        }
+        KeyCode::Tab => {
+            // Cycle through fields
+            if let Mode::NewWorktree { ref mut field, .. } = app.mode {
+                *field = match field {
+                    NewWorktreeField::Branch => NewWorktreeField::Path,
+                    NewWorktreeField::Path => NewWorktreeField::SessionName,
+                    NewWorktreeField::SessionName => NewWorktreeField::Branch,
+                };
+            }
+        }
+        KeyCode::BackTab => {
+            // Cycle backwards through fields
+            if let Mode::NewWorktree { ref mut field, .. } = app.mode {
+                *field = match field {
+                    NewWorktreeField::Branch => NewWorktreeField::SessionName,
+                    NewWorktreeField::Path => NewWorktreeField::Branch,
+                    NewWorktreeField::SessionName => NewWorktreeField::Path,
+                };
+            }
+        }
+        KeyCode::Enter => {
+            app.confirm_new_worktree();
+        }
+        KeyCode::Backspace => {
+            if let Mode::NewWorktree {
+                ref mut branch_input,
+                ref mut worktree_path,
+                ref mut session_name,
+                field,
+                ..
+            } = app.mode
+            {
+                match field {
+                    NewWorktreeField::Branch => {
+                        branch_input.pop();
+                    }
+                    NewWorktreeField::Path => {
+                        worktree_path.pop();
+                    }
+                    NewWorktreeField::SessionName => {
+                        session_name.pop();
+                    }
+                }
+            }
+            // Update suggestions after branch input changes
+            if current_field == NewWorktreeField::Branch {
+                app.update_worktree_suggestions();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Mode::NewWorktree {
+                ref mut branch_input,
+                ref mut worktree_path,
+                ref mut session_name,
+                field,
+                ..
+            } = app.mode
+            {
+                match field {
+                    NewWorktreeField::Branch => {
+                        branch_input.push(c);
+                    }
+                    NewWorktreeField::Path => {
+                        worktree_path.push(c);
+                    }
+                    NewWorktreeField::SessionName => {
+                        // Only allow valid session name characters
+                        if c.is_alphanumeric() || c == '-' || c == '_' {
+                            session_name.push(c);
+                        }
+                    }
+                }
+            }
+            // Update suggestions after branch input changes
+            if current_field == NewWorktreeField::Branch {
+                app.update_worktree_suggestions();
+            }
+        }
+        // Navigate branch suggestions when in Branch field
+        KeyCode::Down if current_field == NewWorktreeField::Branch => {
+            let filtered_count = app.filtered_branches().len();
+            if filtered_count > 0 {
+                if let Mode::NewWorktree {
+                    ref mut selected_branch,
+                    ..
+                } = app.mode
+                {
+                    *selected_branch =
+                        Some(selected_branch.map(|i| (i + 1) % filtered_count).unwrap_or(0));
+                }
+                app.update_worktree_suggestions();
+            }
+        }
+        KeyCode::Up if current_field == NewWorktreeField::Branch => {
+            let filtered_count = app.filtered_branches().len();
+            if filtered_count > 0 {
+                if let Mode::NewWorktree {
+                    ref mut selected_branch,
+                    ..
+                } = app.mode
+                {
+                    *selected_branch = Some(
+                        selected_branch
+                            .map(|i| if i == 0 { filtered_count - 1 } else { i - 1 })
+                            .unwrap_or(filtered_count - 1),
+                    );
+                }
+                app.update_worktree_suggestions();
             }
         }
         _ => {}

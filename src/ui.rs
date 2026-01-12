@@ -8,7 +8,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, NewSessionField};
+use crate::app::{App, Mode, NewSessionField, NewWorktreeField};
 use crate::session::ClaudeCodeStatus;
 
 /// Render the application UI
@@ -48,6 +48,24 @@ pub fn render(frame: &mut Frame, app: &App) {
         }
         Mode::Commit { message } => {
             render_commit_dialog(frame, message);
+        }
+        Mode::NewWorktree {
+            branch_input,
+            selected_branch,
+            worktree_path,
+            session_name,
+            field,
+            ..
+        } => {
+            render_new_worktree_dialog(
+                frame,
+                app,
+                branch_input,
+                *selected_branch,
+                worktree_path,
+                session_name,
+                *field,
+            );
         }
         Mode::Filter { input } => {
             render_filter_bar(frame, input, layout[3]);
@@ -426,6 +444,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::NewSession { .. } => "  ⏎ create  tab switch field  esc cancel",
         Mode::Rename { .. } => "  ⏎ confirm  esc cancel",
         Mode::Commit { .. } => "  ⏎ commit  esc cancel",
+        Mode::NewWorktree { .. } => "  ⏎ create  tab switch field  ↑↓ select branch  esc cancel",
         Mode::Help => "  q close",
     };
 
@@ -442,10 +461,10 @@ fn render_filter_bar(frame: &mut Frame, input: &str, area: Rect) {
 }
 
 fn render_confirm_action(frame: &mut Frame, app: &App) {
-    let session_name = app
-        .selected_session()
-        .map(|s| s.name.as_str())
-        .unwrap_or("?");
+    use crate::app::SessionAction;
+
+    let session = app.selected_session();
+    let session_name = session.map(|s| s.name.as_str()).unwrap_or("?");
 
     let action_desc = app
         .pending_action
@@ -453,21 +472,58 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
         .map(|a| a.label())
         .unwrap_or("Perform action");
 
-    let area = centered_rect(50, 5, frame.area());
+    // Check if this is a worktree deletion to show enhanced dialog
+    let is_worktree_delete = matches!(app.pending_action, Some(SessionAction::KillAndDeleteWorktree));
 
-    let block = Block::default()
-        .title(" Confirm ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
+    if is_worktree_delete {
+        let worktree_path = session
+            .map(|s| s.display_path())
+            .unwrap_or_else(|| "?".to_string());
 
-    let text = format!("{} '{}'?\n\n[Y]es  [n]o", action_desc, session_name);
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .alignment(Alignment::Center)
-        .wrap(Wrap { trim: true });
+        let area = centered_rect(55, 9, frame.area());
 
-    frame.render_widget(Clear, area);
-    frame.render_widget(paragraph, area);
+        let block = Block::default()
+            .title(" Confirm ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
+
+        let text = Text::from(vec![
+            Line::from(format!("Kill session '{}'", session_name)),
+            Line::from("AND delete worktree at:"),
+            Line::styled(format!("  {}", worktree_path), Style::default().fg(Color::Yellow)),
+            Line::raw(""),
+            Line::styled(
+                "⚠ This will permanently delete the directory!",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Line::raw(""),
+            Line::from("[Y]es  [n]o"),
+        ]);
+
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(Clear, area);
+        frame.render_widget(paragraph, area);
+    } else {
+        let area = centered_rect(50, 5, frame.area());
+
+        let block = Block::default()
+            .title(" Confirm ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
+
+        let text = format!("{} '{}'?\n\n[Y]es  [n]o", action_desc, session_name);
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(Clear, area);
+        frame.render_widget(paragraph, area);
+    }
 }
 
 fn render_new_session_dialog(frame: &mut Frame, name: &str, path: &str, field: NewSessionField) {
@@ -549,6 +605,145 @@ fn render_commit_dialog(frame: &mut Frame, message: &str) {
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: true });
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_new_worktree_dialog(
+    frame: &mut Frame,
+    app: &App,
+    branch_input: &str,
+    selected_branch: Option<usize>,
+    worktree_path: &str,
+    session_name: &str,
+    field: NewWorktreeField,
+) {
+    // Get filtered branches
+    let filtered_branches = app.filtered_branches();
+    let is_new_branch = selected_branch.is_none()
+        && !branch_input.is_empty()
+        && !filtered_branches.contains(&branch_input);
+
+    // Calculate dialog height based on branches shown (max 5)
+    let branches_to_show = filtered_branches.len().min(5);
+    let dialog_height = 10 + branches_to_show as u16;
+
+    let area = centered_rect(65, dialog_height, frame.area());
+
+    let block = Block::default()
+        .title(" New Session from Worktree ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    // Build the content
+    let mut lines = Vec::new();
+
+    // Branch field
+    let branch_style = if field == NewWorktreeField::Branch {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    let branch_indicator = if is_new_branch {
+        Span::styled(" (new)", Style::default().fg(Color::Green))
+    } else if selected_branch.is_some() {
+        Span::styled(" (existing)", Style::default().fg(Color::Cyan))
+    } else {
+        Span::raw("")
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("Branch:  ", branch_style),
+        Span::styled(branch_input, Style::default().fg(Color::Yellow)),
+        if field == NewWorktreeField::Branch {
+            Span::raw("_")
+        } else {
+            Span::raw("")
+        },
+        branch_indicator,
+    ]));
+
+    // Show filtered branches if in branch field
+    if field == NewWorktreeField::Branch && !filtered_branches.is_empty() {
+        lines.push(Line::styled(
+            "         ─────────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        for (i, branch) in filtered_branches.iter().take(5).enumerate() {
+            let is_selected = selected_branch == Some(i);
+            let prefix = if is_selected { "       > " } else { "         " };
+            let style = if is_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::styled(format!("{}{}", prefix, branch), style));
+        }
+
+        if filtered_branches.len() > 5 {
+            lines.push(Line::styled(
+                format!("         ... and {} more", filtered_branches.len() - 5),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        lines.push(Line::styled(
+            "         ─────────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    lines.push(Line::raw(""));
+
+    // Path field
+    let path_style = if field == NewWorktreeField::Path {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("Path:    ", path_style),
+        Span::styled(worktree_path, Style::default().fg(Color::Yellow)),
+        if field == NewWorktreeField::Path {
+            Span::raw("_")
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    lines.push(Line::raw(""));
+
+    // Session name field
+    let session_style = if field == NewWorktreeField::SessionName {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("Session: ", session_style),
+        Span::styled(session_name, Style::default().fg(Color::Yellow)),
+        if field == NewWorktreeField::SessionName {
+            Span::raw("_")
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "[Tab] Next field  [Enter] Create  [Esc] Cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let text = Text::from(lines);
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -636,17 +831,29 @@ fn render_help(frame: &mut Frame) {
 
 fn render_message(frame: &mut Frame, message: &str, color: Color) {
     let area = frame.area();
+
+    // Calculate height needed (at least 1, up to 3 for longer messages)
+    let max_width = area.width.saturating_sub(6) as usize;
+    let lines_needed = if max_width > 0 {
+        (message.len() / max_width + 1).min(3)
+    } else {
+        1
+    };
+    let height = lines_needed as u16;
+
     let msg_area = Rect {
         x: 2,
-        y: area.height.saturating_sub(3),
+        y: area.height.saturating_sub(2 + height),
         width: area.width.saturating_sub(4),
-        height: 1,
+        height,
     };
 
     let text = format!(" {} ", message);
     let paragraph = Paragraph::new(text)
-        .style(Style::default().fg(Color::White).bg(color));
+        .style(Style::default().fg(Color::White).bg(color))
+        .wrap(Wrap { trim: true });
 
+    frame.render_widget(Clear, msg_area);
     frame.render_widget(paragraph, msg_area);
 }
 
