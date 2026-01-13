@@ -148,6 +148,13 @@ fn handle_confirm_action_mode(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
+    // Get current field to determine behavior
+    let current_field = if let Mode::NewSession { field, .. } = &app.mode {
+        *field
+    } else {
+        return;
+    };
+
     match key.code {
         KeyCode::Esc => {
             app.cancel();
@@ -164,11 +171,24 @@ fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             app.confirm_new_session(true); // Start claude by default
         }
+        // Path completion navigation (only when path field is active)
+        KeyCode::Up if current_field == NewSessionField::Path => {
+            app.select_prev_new_session_path();
+        }
+        KeyCode::Down if current_field == NewSessionField::Path => {
+            app.select_next_new_session_path();
+        }
+        // Accept completion with Right arrow (only when path field is active)
+        KeyCode::Right if current_field == NewSessionField::Path => {
+            app.accept_new_session_path_completion();
+        }
         KeyCode::Backspace => {
             if let Mode::NewSession {
                 ref mut name,
                 ref mut path,
                 ref field,
+                ref mut path_selected,
+                ..
             } = app.mode
             {
                 match field {
@@ -177,8 +197,12 @@ fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
                     }
                     NewSessionField::Path => {
                         path.pop();
+                        *path_selected = None; // Reset selection on edit
                     }
                 }
+            }
+            if current_field == NewSessionField::Path {
+                app.update_new_session_path_suggestions();
             }
         }
         KeyCode::Char(c) => {
@@ -186,6 +210,8 @@ fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
                 ref mut name,
                 ref mut path,
                 ref field,
+                ref mut path_selected,
+                ..
             } = app.mode
             {
                 match field {
@@ -197,8 +223,12 @@ fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
                     }
                     NewSessionField::Path => {
                         path.push(c);
+                        *path_selected = None; // Reset selection on edit
                     }
                 }
+            }
+            if current_field == NewSessionField::Path {
+                app.update_new_session_path_suggestions();
             }
         }
         _ => {}
@@ -292,6 +322,7 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                 ref mut branch_input,
                 ref mut worktree_path,
                 ref mut session_name,
+                ref mut path_selected,
                 field,
                 ..
             } = app.mode
@@ -302,15 +333,18 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                     }
                     NewWorktreeField::Path => {
                         worktree_path.pop();
+                        *path_selected = None; // Reset selection on edit
                     }
                     NewWorktreeField::SessionName => {
                         session_name.pop();
                     }
                 }
             }
-            // Update suggestions after branch input changes
+            // Update suggestions after input changes
             if current_field == NewWorktreeField::Branch {
                 app.update_worktree_suggestions();
+            } else if current_field == NewWorktreeField::Path {
+                app.update_worktree_path_suggestions();
             }
         }
         KeyCode::Char(c) => {
@@ -318,6 +352,7 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                 ref mut branch_input,
                 ref mut worktree_path,
                 ref mut session_name,
+                ref mut path_selected,
                 field,
                 ..
             } = app.mode
@@ -328,6 +363,7 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                     }
                     NewWorktreeField::Path => {
                         worktree_path.push(c);
+                        *path_selected = None; // Reset selection on edit
                     }
                     NewWorktreeField::SessionName => {
                         // Only allow valid session name characters
@@ -337,9 +373,11 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                     }
                 }
             }
-            // Update suggestions after branch input changes
+            // Update suggestions after input changes
             if current_field == NewWorktreeField::Branch {
                 app.update_worktree_suggestions();
+            } else if current_field == NewWorktreeField::Path {
+                app.update_worktree_path_suggestions();
             }
         }
         // Navigate branch suggestions when in Branch field
@@ -373,6 +411,21 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                 }
                 app.update_worktree_suggestions();
             }
+        }
+        // Accept branch completion with Right arrow
+        KeyCode::Right if current_field == NewWorktreeField::Branch => {
+            app.accept_branch_completion();
+        }
+        // Navigate path suggestions when in Path field
+        KeyCode::Down if current_field == NewWorktreeField::Path => {
+            app.select_next_worktree_path();
+        }
+        KeyCode::Up if current_field == NewWorktreeField::Path => {
+            app.select_prev_worktree_path();
+        }
+        // Accept path completion with Right arrow
+        KeyCode::Right if current_field == NewWorktreeField::Path => {
+            app.accept_worktree_path_completion();
         }
         _ => {}
     }
