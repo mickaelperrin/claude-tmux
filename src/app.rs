@@ -964,6 +964,9 @@ impl App {
                                     actions.push(SessionAction::ViewPullRequest);
                                     actions.push(SessionAction::MergePullRequest);
                                     actions.push(SessionAction::MergePullRequestAndClose);
+                                } else {
+                                    // PR exists but is CLOSED or MERGED - can create a new one
+                                    actions.push(SessionAction::CreatePullRequest);
                                 }
                             } else {
                                 // No PR exists, offer to create one
