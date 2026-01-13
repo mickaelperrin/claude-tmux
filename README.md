@@ -1,6 +1,6 @@
 # claude-tmux
 
-A terminal user interface for managing multiple Claude Code sessions within tmux. claude-tmux provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management, including git worktree support.
+A terminal user interface for managing multiple Claude Code sessions within tmux. claude-tmux provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management, including git worktree and pull request support.
 
 ## Installation
 
@@ -37,6 +37,8 @@ bind-key C-c display-popup -E -w 80 -h 30 "/path/to/claude-tmux"
 
 Reload your tmux configuration.
 Press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
+
+To use pull requests, make sure you have `gh` installed.
 
 ### Tmux options
 
