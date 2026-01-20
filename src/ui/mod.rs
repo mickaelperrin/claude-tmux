@@ -133,7 +133,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let header = Paragraph::new(title)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        .style(Style::default().fg(Color::Rgb(215, 119, 87)).add_modifier(Modifier::BOLD));
 
     frame.render_widget(header, area);
 }
@@ -195,26 +195,33 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         let status = &instance.status;
 
-        // Use brighter colors when selected so text is readable on dark background
-        let status_color = match (status, is_selected) {
-            (ClaudeCodeStatus::Working, _) => Color::Green,
-            (ClaudeCodeStatus::WaitingInput, _) => Color::Yellow,
-            (ClaudeCodeStatus::Idle, true) => Color::White,
-            (ClaudeCodeStatus::Idle, false) => Color::DarkGray,
-            (ClaudeCodeStatus::Unknown, true) => Color::Gray,
-            (ClaudeCodeStatus::Unknown, false) => Color::DarkGray,
+        // Base color for non-selected lines
+        let unselected_color = Color::Rgb(85, 85, 85); // #555
+
+        // Status colors
+        let status_color = if is_selected {
+            match status {
+                ClaudeCodeStatus::Working => Color::Green,
+                ClaudeCodeStatus::WaitingInput => Color::Yellow,
+                ClaudeCodeStatus::Idle => Color::White,
+                ClaudeCodeStatus::Unknown => Color::Gray,
+            }
+        } else {
+            unselected_color
         };
 
         let path_color = if is_selected {
             Color::White
         } else {
-            Color::DarkGray
+            unselected_color
         };
 
-        let name_style = if is_current {
-            Style::default().add_modifier(Modifier::BOLD)
+        let name_style = if is_selected {
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else if is_current {
+            Style::default().fg(unselected_color).add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
+            Style::default().fg(unselected_color)
         };
 
         // Build git info spans
@@ -224,10 +231,10 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 ("(", ")")
             };
-            let bracket_color = if git.is_worktree {
-                Color::Magenta
+            let git_color = if is_selected {
+                Color::White
             } else {
-                Color::Cyan
+                Color::Rgb(215, 119, 87) // Claude Code orange #D77757
             };
 
             // Show status indicators: + for staged, * for unstaged
@@ -254,9 +261,9 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let mut spans = vec![
                 Span::raw(" "),
-                Span::styled(open, Style::default().fg(bracket_color)),
-                Span::styled(&git.branch, Style::default().fg(Color::Cyan)),
-                Span::styled(close, Style::default().fg(bracket_color)),
+                Span::styled(open, Style::default().fg(git_color)),
+                Span::styled(&git.branch, Style::default().fg(git_color)),
+                Span::styled(close, Style::default().fg(git_color)),
             ];
             spans.extend(status_spans);
             spans
@@ -285,7 +292,10 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let line = Line::from(line_spans);
 
         let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Rgb(215, 119, 87))
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Rgb(215, 119, 87))
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -346,7 +356,7 @@ fn render_expanded_instance_content<'a>(
         let mut git_spans = vec![
             Span::raw("     "),
             Span::styled("branch: ", label_style),
-            Span::styled(&git.branch, Style::default().fg(Color::Cyan)),
+            Span::styled(&git.branch, Style::default().fg(Color::Rgb(215, 119, 87))),
         ];
 
         if git.ahead > 0 || git.behind > 0 {
