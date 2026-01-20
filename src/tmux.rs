@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -5,7 +6,7 @@ use anyhow::{Context, Result};
 
 use crate::detection::detect_status;
 use crate::git::GitContext;
-use crate::session::{Pane, Session};
+use crate::session::{ClaudeCodeStatus, ClaudeInstance, Pane, Session};
 
 /// Wrapper for tmux command execution
 pub struct Tmux;
@@ -32,7 +33,10 @@ impl Tmux {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut sessions = Vec::new();
+
+        // First pass: collect all session names and their panes
+        let mut session_data: Vec<(String, i64, bool, usize, Vec<Pane>)> = Vec::new();
+        let mut all_pane_pids: Vec<u32> = Vec::new();
 
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
@@ -45,33 +49,50 @@ impl Tmux {
                 // Get panes for this session
                 let panes = Self::list_panes(&name).unwrap_or_default();
 
-                // Find Claude Code pane and detect status
-                let (claude_code_pane, claude_code_status, working_directory) =
-                    Self::find_claude_code_pane(&name, &panes);
+                // Collect all pane PIDs
+                for pane in &panes {
+                    if pane.pid > 0 {
+                        all_pane_pids.push(pane.pid);
+                    }
+                }
 
-                // Use the Claude Code pane's path, or fall back to first pane's path
-                let working_directory = working_directory.unwrap_or_else(|| {
-                    panes
-                        .first()
-                        .map(|p| p.current_path.clone())
-                        .unwrap_or_default()
-                });
-
-                // Detect git context for the working directory
-                let git_context = GitContext::detect(&working_directory);
-
-                sessions.push(Session {
-                    name,
-                    created,
-                    attached,
-                    working_directory,
-                    window_count,
-                    panes,
-                    claude_code_pane,
-                    claude_code_status,
-                    git_context,
-                });
+                session_data.push((name, created, attached, window_count, panes));
             }
+        }
+
+        // Find which panes have Claude Code running (one call for all panes)
+        let panes_with_claude = Self::find_panes_with_claude(&all_pane_pids);
+
+        // Second pass: build sessions with Claude Code detection
+        let mut sessions = Vec::new();
+
+        for (name, created, attached, window_count, panes) in session_data {
+            // Find Claude Code pane and detect status
+            let (claude_code_pane, claude_code_status, working_directory) =
+                Self::find_claude_code_pane(&panes, &panes_with_claude);
+
+            // Use the Claude Code pane's path, or fall back to first pane's path
+            let working_directory = working_directory.unwrap_or_else(|| {
+                panes
+                    .first()
+                    .map(|p| p.current_path.clone())
+                    .unwrap_or_default()
+            });
+
+            // Detect git context for the working directory
+            let git_context = GitContext::detect(&working_directory);
+
+            sessions.push(Session {
+                name,
+                created,
+                attached,
+                working_directory,
+                window_count,
+                panes,
+                claude_code_pane,
+                claude_code_status,
+                git_context,
+            });
         }
 
         // Sort by attached status first, then by name
@@ -84,15 +105,104 @@ impl Tmux {
         Ok(sessions)
     }
 
-    /// List all panes in a session
+    /// List all Claude Code instances across all tmux sessions
+    pub fn list_claude_instances() -> Result<Vec<ClaudeInstance>> {
+        // Get list of sessions
+        let output = Command::new("tmux")
+            .args([
+                "list-sessions",
+                "-F",
+                "#{session_name}\t#{session_attached}",
+            ])
+            .output()
+            .context("Failed to execute tmux list-sessions")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("no server running") || stderr.contains("no sessions") {
+                return Ok(Vec::new());
+            }
+            anyhow::bail!("tmux list-sessions failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Collect all panes from all sessions
+        let mut all_panes: Vec<(String, bool, Pane)> = Vec::new(); // (session_name, attached, pane)
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 2 {
+                let session_name = parts[0].to_string();
+                let attached = parts[1] == "1";
+
+                // Get all panes for this session
+                let panes = Self::list_panes(&session_name).unwrap_or_default();
+                for pane in panes {
+                    all_panes.push((session_name.clone(), attached, pane));
+                }
+            }
+        }
+
+        // Collect all pane PIDs
+        let all_pane_pids: Vec<u32> = all_panes
+            .iter()
+            .filter(|(_, _, pane)| pane.pid > 0)
+            .map(|(_, _, pane)| pane.pid)
+            .collect();
+
+        // Find which panes have Claude Code running
+        let panes_with_claude = Self::find_panes_with_claude(&all_pane_pids);
+
+        // Build ClaudeInstance for each pane with Claude
+        let mut instances: Vec<ClaudeInstance> = Vec::new();
+
+        for (session_name, attached, pane) in all_panes {
+            if panes_with_claude.contains(&pane.pid) {
+                // Detect Claude status
+                let status = Self::capture_pane(&pane.id, 15, true)
+                    .map(|content| detect_status(&content))
+                    .unwrap_or(ClaudeCodeStatus::Unknown);
+
+                // Detect git context
+                let git_context = GitContext::detect(&pane.current_path);
+
+                instances.push(ClaudeInstance {
+                    session_name,
+                    session_attached: attached,
+                    window_index: pane.window_index,
+                    window_name: pane.window_name,
+                    pane_id: pane.id,
+                    pane_index: pane.pane_index,
+                    working_directory: pane.current_path,
+                    status,
+                    git_context,
+                });
+            }
+        }
+
+        // Sort by: attached sessions first, then session name, then window index, then pane index
+        instances.sort_by(|a, b| {
+            b.session_attached
+                .cmp(&a.session_attached)
+                .then_with(|| a.session_name.cmp(&b.session_name))
+                .then_with(|| a.window_index.cmp(&b.window_index))
+                .then_with(|| a.pane_index.cmp(&b.pane_index))
+        });
+
+        Ok(instances)
+    }
+
+    /// List all panes in a session (across all windows)
     fn list_panes(session: &str) -> Result<Vec<Pane>> {
         let output = Command::new("tmux")
             .args([
                 "list-panes",
                 "-t",
                 session,
+                "-s", // List all panes in all windows
                 "-F",
-                "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}",
+                "#{pane_id}\t#{pane_index}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}\t#{window_index}\t#{window_name}",
             ])
             .output()
             .context("Failed to execute tmux list-panes")?;
@@ -106,11 +216,15 @@ impl Tmux {
 
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 3 {
+            if parts.len() >= 7 {
                 panes.push(Pane {
                     id: parts[0].to_string(),
-                    current_command: parts[1].to_string(),
-                    current_path: PathBuf::from(parts[2]),
+                    pane_index: parts[1].parse().unwrap_or(0),
+                    pid: parts[2].parse().unwrap_or(0),
+                    current_command: parts[3].to_string(),
+                    current_path: PathBuf::from(parts[4]),
+                    window_index: parts[5].parse().unwrap_or(0),
+                    window_name: parts[6].to_string(),
                 });
             }
         }
@@ -118,10 +232,98 @@ impl Tmux {
         Ok(panes)
     }
 
+    /// Get the process parent map (pid -> ppid) for all processes
+    fn get_process_parent_map() -> HashMap<u32, u32> {
+        let mut map = HashMap::new();
+
+        let output = Command::new("ps")
+            .args(["-eo", "pid,ppid"])
+            .output()
+            .ok();
+
+        if let Some(output) = output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines().skip(1) {
+                    // Skip header
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let (Ok(pid), Ok(ppid)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+                        {
+                            map.insert(pid, ppid);
+                        }
+                    }
+                }
+            }
+        }
+
+        map
+    }
+
+    /// Get PIDs of all running claude processes
+    fn get_claude_pids() -> Vec<u32> {
+        let mut pids = Vec::new();
+
+        let output = Command::new("pgrep")
+            .args(["-f", "bin/claude"])
+            .output()
+            .ok();
+
+        if let Some(output) = output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if let Ok(pid) = line.trim().parse::<u32>() {
+                        pids.push(pid);
+                    }
+                }
+            }
+        }
+
+        pids
+    }
+
+    /// Find which pane_pids have a claude process as a descendant
+    fn find_panes_with_claude(pane_pids: &[u32]) -> HashSet<u32> {
+        let parent_map = Self::get_process_parent_map();
+        let claude_pids = Self::get_claude_pids();
+        let pane_pid_set: HashSet<u32> = pane_pids.iter().copied().collect();
+
+        let mut panes_with_claude = HashSet::new();
+
+        // For each claude process, walk up the parent chain to find if it's under a pane_pid
+        for claude_pid in claude_pids {
+            let mut current = claude_pid;
+            let mut visited = HashSet::new();
+
+            // Walk up the parent chain (max 100 iterations to prevent infinite loops)
+            while current > 1 && visited.len() < 100 {
+                if visited.contains(&current) {
+                    break; // Cycle detected
+                }
+                visited.insert(current);
+
+                if pane_pid_set.contains(&current) {
+                    panes_with_claude.insert(current);
+                    break;
+                }
+
+                // Move to parent
+                if let Some(&ppid) = parent_map.get(&current) {
+                    current = ppid;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        panes_with_claude
+    }
+
     /// Find the pane running Claude Code and detect its status
     fn find_claude_code_pane(
-        _session: &str,
         panes: &[Pane],
+        panes_with_claude: &HashSet<u32>,
     ) -> (
         Option<String>,
         crate::session::ClaudeCodeStatus,
@@ -130,8 +332,8 @@ impl Tmux {
         use crate::session::ClaudeCodeStatus;
 
         for pane in panes {
-            // Check if this pane is running claude
-            if pane.current_command == "claude" || pane.current_command.contains("claude") {
+            // Check if this pane has a claude process as descendant
+            if panes_with_claude.contains(&pane.pid) {
                 // Capture pane content to detect status (strip empty lines for detection)
                 let status = Self::capture_pane(&pane.id, 15, true)
                     .map(|content| detect_status(&content))
@@ -212,6 +414,20 @@ impl Tmux {
         Ok(())
     }
 
+    /// Switch the current client to a specific pane (target format: session:window.pane)
+    pub fn switch_to_pane(target: &str) -> Result<()> {
+        let status = Command::new("tmux")
+            .args(["switch-client", "-t", target])
+            .status()
+            .context("Failed to switch to pane")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to switch to pane {}", target);
+        }
+
+        Ok(())
+    }
+
     /// Create a new tmux session
     pub fn new_session(name: &str, path: &std::path::Path, start_claude: bool) -> Result<()> {
         let path_str = path.to_string_lossy();
@@ -279,6 +495,29 @@ impl Tmux {
             Ok(None)
         } else {
             Ok(Some(name))
+        }
+    }
+
+    /// Get the current pane target (session:window.pane format)
+    pub fn current_pane() -> Result<Option<String>> {
+        let output = Command::new("tmux")
+            .args([
+                "display-message",
+                "-p",
+                "#{session_name}:#{window_index}.#{pane_index}",
+            ])
+            .output()
+            .context("Failed to get current pane")?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let target = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if target.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(target))
         }
     }
 }

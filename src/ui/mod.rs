@@ -121,7 +121,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let current = app
-        .current_session
+        .current_pane
         .as_ref()
         .map(|s| format!(" attached: {} ", s))
         .unwrap_or_default();
@@ -148,13 +148,13 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
     // (items building borrows app immutably, scroll_state needs mutable access)
     let mut scroll_state = std::mem::take(&mut app.scroll_state);
 
-    let filtered = app.filtered_sessions();
+    let filtered = app.filtered_instances();
 
     if filtered.is_empty() {
         let empty_msg = if app.filter.is_empty() {
-            "No tmux sessions found. Press 'n' to create one."
+            "No Claude Code instances found. Press 'n' to create a new session."
         } else {
-            "No sessions match the filter."
+            "No instances match the filter."
         };
         let paragraph = Paragraph::new(empty_msg)
             .style(Style::default().fg(Color::DarkGray))
@@ -165,24 +165,24 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // Calculate column widths
+    // Calculate column widths based on display name (session:window.pane)
     let max_name_len = filtered
         .iter()
-        .map(|s| s.name.width())
+        .map(|inst| inst.display_name().width())
         .max()
         .unwrap_or(10)
         .max(10);
 
     let mut items: Vec<ListItem> = Vec::new();
 
-    for (i, session) in filtered.iter().enumerate() {
+    for (i, instance) in filtered.iter().enumerate() {
         let is_selected = i == app.selected;
         let is_current = app
-            .current_session
+            .current_pane
             .as_ref()
-            .is_some_and(|c| c == &session.name);
+            .is_some_and(|c| c == &instance.tmux_target());
 
-        // Show ▾ when action menu is open for this session, ▸ when selected but collapsed
+        // Show ▾ when action menu is open for this instance, ▸ when selected but collapsed
         let is_expanded = is_selected && matches!(app.mode, Mode::ActionMenu);
         let marker = if is_selected {
             if is_expanded {
@@ -193,7 +193,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             " "
         };
-        let status = &session.claude_code_status;
+        let status = &instance.status;
 
         // Use brighter colors when selected so text is readable on dark background
         let status_color = match (status, is_selected) {
@@ -218,7 +218,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         };
 
         // Build git info spans
-        let git_spans = if let Some(ref git) = session.git_context {
+        let git_spans = if let Some(ref git) = instance.git_context {
             let (open, close) = if git.is_worktree {
                 ("[", "]")
             } else {
@@ -267,7 +267,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut line_spans = vec![
             Span::raw(format!(" {} ", marker)),
             Span::styled(
-                format!("{:<width$}", session.name, width = max_name_len),
+                format!("{:<width$}", instance.display_name(), width = max_name_len),
                 name_style,
             ),
             Span::raw("  "),
@@ -278,7 +278,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default().fg(status_color),
             ),
             Span::raw("  "),
-            Span::styled(session.display_path(), Style::default().fg(path_color)),
+            Span::styled(instance.display_path(), Style::default().fg(path_color)),
         ];
         line_spans.extend(git_spans);
 
@@ -292,9 +292,9 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
         items.push(ListItem::new(line).style(style));
 
-        // Show expanded content when in action menu mode for this session
+        // Show expanded content when in action menu mode for this instance
         if is_expanded {
-            render_expanded_session_content(app, session, &mut items);
+            render_expanded_instance_content(app, instance, &mut items);
         }
     }
 
@@ -313,29 +313,28 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
     app.scroll_state = scroll_state;
 }
 
-/// Render the expanded content for a session in action menu mode
-fn render_expanded_session_content<'a>(
+/// Render the expanded content for an instance in action menu mode
+fn render_expanded_instance_content<'a>(
     app: &'a App,
-    session: &'a crate::session::Session,
+    instance: &'a crate::session::ClaudeInstance,
     items: &mut Vec<ListItem<'a>>,
 ) {
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
 
-    // Session metadata row
-    let attached_str = if session.attached { "yes" } else { "no" };
-    let pane_count = session.panes.len();
+    // Instance metadata row
+    let attached_str = if instance.session_attached { "yes" } else { "no" };
 
     let meta_line = Line::from(vec![
         Span::raw("     "),
-        Span::styled("windows: ", label_style),
-        Span::styled(format!("{}", session.window_count), value_style),
+        Span::styled("session: ", label_style),
+        Span::styled(&instance.session_name, value_style),
         Span::raw("  "),
-        Span::styled("panes: ", label_style),
-        Span::styled(format!("{}", pane_count), value_style),
+        Span::styled("window: ", label_style),
+        Span::styled(&instance.window_name, value_style),
         Span::raw("  "),
-        Span::styled("uptime: ", label_style),
-        Span::styled(session.duration(), value_style),
+        Span::styled("pane: ", label_style),
+        Span::styled(format!("{}", instance.pane_index), value_style),
         Span::raw("  "),
         Span::styled("attached: ", label_style),
         Span::styled(attached_str, value_style),
@@ -343,7 +342,7 @@ fn render_expanded_session_content<'a>(
     items.push(ListItem::new(meta_line));
 
     // Git metadata row (if available)
-    if let Some(ref git) = session.git_context {
+    if let Some(ref git) = instance.git_context {
         let mut git_spans = vec![
             Span::raw("     "),
             Span::styled("branch: ", label_style),
@@ -519,9 +518,9 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let (working, waiting, _idle) = app.status_counts();
-    let total = app.sessions.len();
+    let total = app.instances.len();
 
-    let mut parts = vec![format!("{} sessions", total)];
+    let mut parts = vec![format!("{} instances", total)];
 
     if working > 0 {
         parts.push(format!("{} working", working));

@@ -17,24 +17,24 @@ use crate::app::{App, CreatePullRequestField, NewSessionField, NewWorktreeField,
 use super::help::centered_rect;
 
 pub fn render_confirm_action(frame: &mut Frame, app: &App) {
-    let session = app.selected_session();
-    let session_name = session.map(|s| s.name.as_str()).unwrap_or("?");
-    let is_worktree = session
-        .and_then(|s| s.git_context.as_ref())
+    let instance = app.selected_instance();
+    let session_name = instance.map(|i| i.session_name.as_str()).unwrap_or("?");
+    let is_worktree = instance
+        .and_then(|i| i.git_context.as_ref())
         .map(|g| g.is_worktree)
         .unwrap_or(false);
-    let is_current_session = app
-        .current_session
+    let is_current_pane = app
+        .current_pane
         .as_ref()
-        .is_some_and(|c| c == session_name);
+        .is_some_and(|c| instance.is_some_and(|i| c == &i.tmux_target()));
 
     match &app.pending_action {
         Some(SessionAction::KillAndDeleteWorktree) => {
-            let worktree_path = session
-                .map(|s| s.display_path())
+            let worktree_path = instance
+                .map(|i| i.display_path())
                 .unwrap_or_else(|| "?".to_string());
 
-            let dialog_height = if is_current_session { 11 } else { 9 };
+            let dialog_height = if is_current_pane { 11 } else { 9 };
             let area = centered_rect(55, dialog_height, frame.area());
 
             let block = Block::default()
@@ -58,7 +58,7 @@ pub fn render_confirm_action(frame: &mut Frame, app: &App) {
                 ),
             ];
 
-            if is_current_session {
+            if is_current_pane {
                 lines.push(Line::styled(
                     "⚠ This is your current session - tmux will exit!",
                     Style::default()
@@ -113,7 +113,7 @@ pub fn render_confirm_action(frame: &mut Frame, app: &App) {
             frame.render_widget(paragraph, area);
         }
         Some(SessionAction::MergePullRequestAndClose) => {
-            let dialog_height = if is_current_session { 12 } else { 10 };
+            let dialog_height = if is_current_pane { 12 } else { 10 };
             let area = centered_rect(58, dialog_height, frame.area());
 
             let block = Block::default()
@@ -141,7 +141,7 @@ pub fn render_confirm_action(frame: &mut Frame, app: &App) {
                 Style::default().fg(Color::Red),
             ));
 
-            if is_current_session {
+            if is_current_pane {
                 lines.push(Line::raw(""));
                 lines.push(Line::styled(
                     "⚠ This is your current session - tmux will exit!",
@@ -165,7 +165,7 @@ pub fn render_confirm_action(frame: &mut Frame, app: &App) {
         Some(action) => {
             // Check if this action kills a session (currently only Kill action reaches here)
             let kills_session = matches!(action, SessionAction::Kill);
-            let show_exit_warning = kills_session && is_current_session;
+            let show_exit_warning = kills_session && is_current_pane;
 
             let dialog_height = if show_exit_warning { 7 } else { 5 };
             let area = centered_rect(55, dialog_height, frame.area());

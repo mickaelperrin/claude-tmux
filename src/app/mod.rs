@@ -13,7 +13,7 @@ use anyhow::Result;
 
 use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
-use crate::session::Session;
+use crate::session::ClaudeInstance;
 use crate::tmux::Tmux;
 
 // Re-export types that are part of the public API
@@ -26,33 +26,33 @@ use helpers::{default_worktree_path, expand_path, sanitize_for_session_name};
 
 /// Main application state
 pub struct App {
-    /// All discovered sessions
-    pub sessions: Vec<Session>,
+    /// All discovered Claude Code instances
+    pub instances: Vec<ClaudeInstance>,
     /// Currently selected index
     pub selected: usize,
     /// Current UI mode
     pub mode: Mode,
     /// Whether the app should quit
     pub should_quit: bool,
-    /// Name of the currently attached session (if any)
-    pub current_session: Option<String>,
-    /// Filter text for filtering sessions
+    /// Current pane target (session:window.pane format)
+    pub current_pane: Option<String>,
+    /// Filter text for filtering instances
     pub filter: String,
     /// Error message to display (clears on next action)
     pub error: Option<String>,
     /// Success message to display (clears on next action)
     pub message: Option<String>,
-    /// Cached preview content for the selected session's pane
+    /// Cached preview content for the selected pane
     pub preview_content: Option<String>,
-    /// Available actions for the selected session (computed when entering action menu)
+    /// Available actions for the selected instance (computed when entering action menu)
     pub available_actions: Vec<SessionAction>,
     /// Currently highlighted action in ActionMenu mode
     pub selected_action: usize,
     /// Action pending confirmation
     pub pending_action: Option<SessionAction>,
-    /// PR info for the selected session (computed when entering action menu)
+    /// PR info for the selected instance (computed when entering action menu)
     pub pr_info: Option<PullRequestInfo>,
-    /// Scroll state for the session list
+    /// Scroll state for the instance list
     pub scroll_state: ScrollState,
 }
 
@@ -63,15 +63,15 @@ impl App {
 
     /// Create a new App instance
     pub fn new() -> Result<Self> {
-        let sessions = Tmux::list_sessions()?;
-        let current_session = Tmux::current_session()?;
+        let instances = Tmux::list_claude_instances()?;
+        let current_pane = Tmux::current_pane()?;
 
         let mut app = Self {
-            sessions,
+            instances,
             selected: 0,
             mode: Mode::Normal,
             should_quit: false,
-            current_session,
+            current_pane,
             filter: String::new(),
             error: None,
             message: None,
@@ -87,17 +87,11 @@ impl App {
         Ok(app)
     }
 
-    /// Update the preview content for the currently selected session
+    /// Update the preview content for the currently selected instance
     pub fn update_preview(&mut self) {
         const PREVIEW_LINES: usize = 15;
 
-        let pane_id = self.selected_session().and_then(|session| {
-            // Prefer Claude pane, fall back to first pane
-            session
-                .claude_code_pane
-                .clone()
-                .or_else(|| session.panes.first().map(|p| p.id.clone()))
-        });
+        let pane_id = self.selected_instance().map(|inst| inst.pane_id.clone());
 
         self.preview_content = pane_id.and_then(|id| {
             // Don't strip empty lines - preserve visual layout for preview
@@ -111,22 +105,22 @@ impl App {
         self.message = None;
     }
 
-    /// Refresh the session list (shows "Refreshed" message)
+    /// Refresh the instance list (shows "Refreshed" message)
     pub fn refresh(&mut self) {
         self.clear_messages();
-        if self.refresh_sessions() {
+        if self.refresh_instances() {
             self.message = Some("Refreshed".to_string());
         }
     }
 
-    /// Refresh sessions without affecting messages (for use after git operations)
-    fn refresh_sessions(&mut self) -> bool {
-        match Tmux::list_sessions() {
-            Ok(sessions) => {
-                self.sessions = sessions;
+    /// Refresh instances without affecting messages (for use after git operations)
+    fn refresh_instances(&mut self) -> bool {
+        match Tmux::list_claude_instances() {
+            Ok(instances) => {
+                self.instances = instances;
                 // Ensure selected index is still valid
-                if self.selected >= self.sessions.len() && !self.sessions.is_empty() {
-                    self.selected = self.sessions.len() - 1;
+                if self.selected >= self.instances.len() && !self.instances.is_empty() {
+                    self.selected = self.instances.len() - 1;
                 }
                 self.update_preview();
                 true
@@ -139,34 +133,35 @@ impl App {
     }
 
     // =========================================================================
-    // Session selection and navigation
+    // Instance selection and navigation
     // =========================================================================
 
-    /// Get filtered sessions based on current filter
-    pub fn filtered_sessions(&self) -> Vec<&Session> {
+    /// Get filtered instances based on current filter
+    pub fn filtered_instances(&self) -> Vec<&ClaudeInstance> {
         if self.filter.is_empty() {
-            self.sessions.iter().collect()
+            self.instances.iter().collect()
         } else {
             let filter_lower = self.filter.to_lowercase();
-            self.sessions
+            self.instances
                 .iter()
-                .filter(|s| {
-                    s.name.to_lowercase().contains(&filter_lower)
-                        || s.display_path().to_lowercase().contains(&filter_lower)
+                .filter(|inst| {
+                    inst.session_name.to_lowercase().contains(&filter_lower)
+                        || inst.display_path().to_lowercase().contains(&filter_lower)
+                        || inst.window_name.to_lowercase().contains(&filter_lower)
                 })
                 .collect()
         }
     }
 
-    /// Get the currently selected session
-    pub fn selected_session(&self) -> Option<&Session> {
-        let filtered = self.filtered_sessions();
+    /// Get the currently selected instance
+    pub fn selected_instance(&self) -> Option<&ClaudeInstance> {
+        let filtered = self.filtered_instances();
         filtered.get(self.selected).copied()
     }
 
     /// Move selection up
     pub fn select_prev(&mut self) {
-        let count = self.filtered_sessions().len();
+        let count = self.filtered_instances().len();
         if count > 0 && self.selected > 0 {
             self.selected -= 1;
             self.update_preview();
@@ -175,19 +170,19 @@ impl App {
 
     /// Move selection down
     pub fn select_next(&mut self) {
-        let count = self.filtered_sessions().len();
+        let count = self.filtered_instances().len();
         if count > 0 && self.selected < count - 1 {
             self.selected += 1;
             self.update_preview();
         }
     }
 
-    /// Switch to the selected session
+    /// Switch to the selected instance's pane
     pub fn switch_to_selected(&mut self) {
         self.clear_messages();
-        if let Some(session) = self.selected_session() {
-            let name = session.name.clone();
-            match Tmux::switch_to_session(&name) {
+        if let Some(instance) = self.selected_instance() {
+            let target = instance.tmux_target();
+            match Tmux::switch_to_pane(&target) {
                 Ok(_) => {
                     self.should_quit = true;
                 }
@@ -202,10 +197,10 @@ impl App {
     // Action menu
     // =========================================================================
 
-    /// Enter the action menu for the selected session
+    /// Enter the action menu for the selected instance
     pub fn enter_action_menu(&mut self) {
         self.clear_messages();
-        if self.selected_session().is_some() {
+        if self.selected_instance().is_some() {
             self.compute_actions();
             self.mode = Mode::ActionMenu;
         }
@@ -242,20 +237,20 @@ impl App {
         }
     }
 
-    /// Compute available actions for the selected session
+    /// Compute available actions for the selected instance
     fn compute_actions(&mut self) {
-        // Extract data we need from the session first to avoid borrow conflicts
-        let session_data = self.selected_session().map(|s| {
-            (s.working_directory.clone(), s.git_context.clone())
+        // Extract data we need from the instance first to avoid borrow conflicts
+        let instance_data = self.selected_instance().map(|inst| {
+            (inst.working_directory.clone(), inst.git_context.clone())
         });
 
-        let Some((working_dir, git_context)) = session_data else {
+        let Some((working_dir, git_context)) = instance_data else {
             self.available_actions = vec![];
             self.pr_info = None;
             return;
         };
 
-        let mut actions = vec![SessionAction::SwitchTo, SessionAction::Rename];
+        let mut actions = vec![SessionAction::SwitchTo];
 
         // Reset PR info
         self.pr_info = None;
@@ -341,7 +336,7 @@ impl App {
     /// Start the kill confirmation flow (direct kill without action menu)
     pub fn start_kill(&mut self) {
         self.clear_messages();
-        if self.selected_session().is_some() {
+        if self.selected_instance().is_some() {
             self.pending_action = Some(SessionAction::Kill);
             self.mode = Mode::ConfirmAction;
         }
@@ -355,17 +350,20 @@ impl App {
         self.mode = Mode::Normal;
     }
 
-    /// Execute an action on the selected session
+    /// Execute an action on the selected instance
     fn execute_action(&mut self, action: SessionAction) {
-        let Some(session) = self.selected_session() else {
+        let Some(instance) = self.selected_instance() else {
             self.mode = Mode::Normal;
             return;
         };
-        let session_name = session.name.clone();
+        let target = instance.tmux_target();
+        let session_name = instance.session_name.clone();
+        let working_directory = instance.working_directory.clone();
+        let git_context = instance.git_context.clone();
 
         match action {
             SessionAction::SwitchTo => {
-                match Tmux::switch_to_session(&session_name) {
+                match Tmux::switch_to_pane(&target) {
                     Ok(_) => self.should_quit = true,
                     Err(e) => self.error = Some(format!("Failed to switch: {}", e)),
                 }
@@ -378,10 +376,9 @@ impl App {
                 };
             }
             SessionAction::Stage => {
-                let path = session.working_directory.clone();
-                match GitContext::stage_all(&path) {
+                match GitContext::stage_all(&working_directory) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some("Staged all changes".to_string());
                     }
                     Err(e) => self.error = Some(format!("Stage failed: {}", e)),
@@ -394,10 +391,9 @@ impl App {
                 };
             }
             SessionAction::Push => {
-                let path = session.working_directory.clone();
-                match GitContext::push(&path) {
+                match GitContext::push(&working_directory) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some("Pushed to remote".to_string());
                     }
                     Err(e) => self.error = Some(format!("Push failed: {}", e)),
@@ -405,10 +401,9 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::PushSetUpstream => {
-                let path = session.working_directory.clone();
-                match GitContext::push_set_upstream(&path) {
+                match GitContext::push_set_upstream(&working_directory) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some("Pushed and set upstream".to_string());
                     }
                     Err(e) => self.error = Some(format!("Push failed: {}", e)),
@@ -416,10 +411,9 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::Fetch => {
-                let path = session.working_directory.clone();
-                match GitContext::fetch(&path) {
+                match GitContext::fetch(&working_directory) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some("Fetched from remote".to_string());
                     }
                     Err(e) => self.error = Some(format!("Fetch failed: {}", e)),
@@ -427,10 +421,9 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::Pull => {
-                let path = session.working_directory.clone();
-                match GitContext::pull(&path) {
+                match GitContext::pull(&working_directory) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some("Pulled from remote".to_string());
                     }
                     Err(e) => self.error = Some(format!("Pull failed: {}", e)),
@@ -441,8 +434,7 @@ impl App {
                 self.start_create_pull_request();
             }
             SessionAction::ViewPullRequest => {
-                let path = session.working_directory.clone();
-                match git::view_pull_request(&path) {
+                match git::view_pull_request(&working_directory) {
                     Ok(_) => {
                         self.message = Some("Opened PR in browser".to_string());
                     }
@@ -451,8 +443,7 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::ClosePullRequest => {
-                let path = session.working_directory.clone();
-                match git::close_pull_request(&path) {
+                match git::close_pull_request(&working_directory) {
                     Ok(_) => {
                         self.message = Some("Closed pull request".to_string());
                     }
@@ -461,10 +452,9 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::MergePullRequest => {
-                let path = session.working_directory.clone();
-                match git::merge_pull_request(&path, false) {
+                match git::merge_pull_request(&working_directory, false) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some("Merged pull request".to_string());
                     }
                     Err(e) => self.error = Some(format!("Failed to merge PR: {}", e)),
@@ -472,19 +462,17 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::MergePullRequestAndClose => {
-                let path = session.working_directory.clone();
-                let is_worktree = session
-                    .git_context
+                let is_worktree = git_context
                     .as_ref()
                     .map(|g| g.is_worktree)
                     .unwrap_or(false);
 
                 // Step 1: Merge PR
-                match git::merge_pull_request(&path, false) {
+                match git::merge_pull_request(&working_directory, false) {
                     Ok(_) => {
                         // Step 2: Delete worktree if applicable
                         if is_worktree {
-                            if let Err(e) = GitContext::delete_worktree(&path, true) {
+                            if let Err(e) = GitContext::delete_worktree(&working_directory, true) {
                                 self.error =
                                     Some(format!("PR merged but failed to delete worktree: {}", e));
                                 self.mode = Mode::Normal;
@@ -495,7 +483,7 @@ impl App {
                         // Step 3: Kill the session
                         match Tmux::kill_session(&session_name) {
                             Ok(_) => {
-                                self.refresh_sessions();
+                                self.refresh_instances();
                                 self.message = Some(if is_worktree {
                                     "Merged PR, removed worktree, and closed session".to_string()
                                 } else {
@@ -503,7 +491,7 @@ impl App {
                                 });
                             }
                             Err(e) => {
-                                self.refresh_sessions();
+                                self.refresh_instances();
                                 self.error = Some(format!(
                                     "PR merged but failed to kill session: {}",
                                     e
@@ -518,7 +506,7 @@ impl App {
             SessionAction::Kill => {
                 match Tmux::kill_session(&session_name) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some(format!("Killed session '{}'", session_name));
                     }
                     Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
@@ -529,21 +517,20 @@ impl App {
                 self.start_new_worktree();
             }
             SessionAction::KillAndDeleteWorktree => {
-                let worktree_path = session.working_directory.clone();
-                // First delete the worktree (while session still provides git context)
-                match GitContext::delete_worktree(&worktree_path, false) {
+                // First delete the worktree
+                match GitContext::delete_worktree(&working_directory, false) {
                     Ok(_) => {
                         // Then kill the session
                         match Tmux::kill_session(&session_name) {
                             Ok(_) => {
-                                self.refresh_sessions();
+                                self.refresh_instances();
                                 self.message = Some(format!(
                                     "Deleted worktree and killed session '{}'",
                                     session_name
                                 ));
                             }
                             Err(e) => {
-                                self.refresh_sessions();
+                                self.refresh_instances();
                                 self.error = Some(format!(
                                     "Worktree deleted but failed to kill session: {}",
                                     e
@@ -562,13 +549,13 @@ impl App {
     // Dialog flows: Rename
     // =========================================================================
 
-    /// Start the rename flow
+    /// Start the rename flow (renames the session)
     pub fn start_rename(&mut self) {
         self.clear_messages();
-        if let Some(session) = self.selected_session() {
+        if let Some(instance) = self.selected_instance() {
             self.mode = Mode::Rename {
-                old_name: session.name.clone(),
-                new_name: session.name.clone(),
+                old_name: instance.session_name.clone(),
+                new_name: instance.session_name.clone(),
             };
         }
     }
@@ -590,7 +577,7 @@ impl App {
 
             match Tmux::rename_session(&old, &new) {
                 Ok(_) => {
-                    self.refresh_sessions();
+                    self.refresh_instances();
                     self.message = Some(format!("Renamed '{}' to '{}'", old, new));
                 }
                 Err(e) => {
@@ -614,12 +601,12 @@ impl App {
                 return;
             }
 
-            if let Some(session) = self.selected_session() {
-                let path = session.working_directory.clone();
+            if let Some(instance) = self.selected_instance() {
+                let path = instance.working_directory.clone();
                 let msg = message.clone();
                 match GitContext::commit(&path, &msg) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some("Committed changes".to_string());
                     }
                     Err(e) => self.error = Some(format!("Commit failed: {}", e)),
@@ -670,7 +657,7 @@ impl App {
 
             match Tmux::new_session(&session_name, &session_path, start_claude) {
                 Ok(_) => {
-                    self.refresh_sessions();
+                    self.refresh_instances();
                     self.message = Some(format!("Created session '{}'", session_name));
                 }
                 Err(e) => {
@@ -688,18 +675,18 @@ impl App {
     /// Start the new worktree flow
     pub fn start_new_worktree(&mut self) {
         self.clear_messages();
-        let Some(session) = self.selected_session() else {
+        let Some(instance) = self.selected_instance() else {
             return;
         };
 
         // Get the repo path (use main repo if this is a worktree)
-        let source_repo = if let Some(ref git) = session.git_context {
+        let source_repo = if let Some(ref git) = instance.git_context {
             if git.is_worktree {
                 git.main_repo_path
                     .clone()
-                    .unwrap_or_else(|| session.working_directory.clone())
+                    .unwrap_or_else(|| instance.working_directory.clone())
             } else {
-                session.working_directory.clone()
+                instance.working_directory.clone()
             }
         } else {
             return; // Not a git repo
@@ -892,7 +879,7 @@ impl App {
                 // Create the session
                 match Tmux::new_session(&session_name, &worktree_path_buf, true) {
                     Ok(_) => {
-                        self.refresh_sessions();
+                        self.refresh_instances();
                         self.message = Some(format!(
                             "Created worktree '{}' and session '{}'",
                             branch_name, session_name
@@ -921,11 +908,11 @@ impl App {
     /// Start the create pull request flow
     pub fn start_create_pull_request(&mut self) {
         self.clear_messages();
-        let Some(session) = self.selected_session() else {
+        let Some(instance) = self.selected_instance() else {
             return;
         };
 
-        let path = &session.working_directory;
+        let path = &instance.working_directory;
         let base_branch = git::get_default_branch(path).unwrap_or_else(|| "main".to_string());
 
         self.mode = Mode::CreatePullRequest {
@@ -957,8 +944,8 @@ impl App {
             return;
         }
 
-        if let Some(session) = self.selected_session() {
-            let path = session.working_directory.clone();
+        if let Some(instance) = self.selected_instance() {
+            let path = instance.working_directory.clone();
             match git::create_pull_request(&path, &title, &body, &base_branch) {
                 Ok(result) => {
                     self.message = Some(format!("Created PR: {}", result.url));
@@ -1017,7 +1004,7 @@ impl App {
     // Status and statistics
     // =========================================================================
 
-    /// Count sessions by status
+    /// Count instances by status
     pub fn status_counts(&self) -> (usize, usize, usize) {
         use crate::session::ClaudeCodeStatus;
 
@@ -1025,8 +1012,8 @@ impl App {
         let mut waiting = 0;
         let mut idle = 0;
 
-        for session in &self.sessions {
-            match session.claude_code_status {
+        for instance in &self.instances {
+            match instance.status {
                 ClaudeCodeStatus::Working => working += 1,
                 ClaudeCodeStatus::WaitingInput => waiting += 1,
                 ClaudeCodeStatus::Idle => idle += 1,
@@ -1281,17 +1268,17 @@ impl App {
     /// to show metadata and action items. This method computes the index
     /// into the flat list of rendered items.
     pub fn compute_flat_list_index(&self) -> usize {
-        let filtered_count = self.filtered_sessions().len();
+        let filtered_count = self.filtered_instances().len();
         if filtered_count == 0 {
             return 0;
         }
 
         match self.mode {
             Mode::ActionMenu => {
-                // Count items before selected session (1 row each)
+                // Count items before selected instance (1 row each)
                 let mut index = self.selected;
 
-                // Add 1 for the selected session row itself
+                // Add 1 for the selected instance row itself
                 index += 1;
 
                 // Add 1 for metadata row (always present when expanded)
@@ -1299,8 +1286,8 @@ impl App {
 
                 // Add 1 for git info row if present
                 if self
-                    .selected_session()
-                    .is_some_and(|s| s.git_context.is_some())
+                    .selected_instance()
+                    .is_some_and(|inst| inst.git_context.is_some())
                 {
                     index += 1;
 
@@ -1319,7 +1306,7 @@ impl App {
                 index
             }
             _ => {
-                // In non-ActionMenu modes, just the session index
+                // In non-ActionMenu modes, just the instance index
                 self.selected
             }
         }
@@ -1329,17 +1316,17 @@ impl App {
     ///
     /// This accounts for the expanded content when in ActionMenu mode.
     pub fn compute_total_list_items(&self) -> usize {
-        let filtered_count = self.filtered_sessions().len();
+        let filtered_count = self.filtered_instances().len();
         if filtered_count == 0 {
             return 0;
         }
 
         match self.mode {
             Mode::ActionMenu => {
-                // Base: one row per session
+                // Base: one row per instance
                 let mut total = filtered_count;
 
-                // Add expanded content for selected session:
+                // Add expanded content for selected instance:
                 // - 1 metadata row
                 // - 1 git info row (if git context)
                 // - 1 PR info row (if pr_info)
@@ -1349,8 +1336,8 @@ impl App {
                 total += 1; // metadata row
 
                 if self
-                    .selected_session()
-                    .is_some_and(|s| s.git_context.is_some())
+                    .selected_instance()
+                    .is_some_and(|inst| inst.git_context.is_some())
                 {
                     total += 1; // git info row
                     if self.pr_info.is_some() {

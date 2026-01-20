@@ -43,10 +43,80 @@ impl ClaudeCodeStatus {
 pub struct Pane {
     /// Pane ID (e.g., "%0")
     pub id: String,
+    /// Pane index within the window
+    pub pane_index: usize,
+    /// Process ID of the pane's shell
+    pub pid: u32,
     /// Current command running in the pane
     pub current_command: String,
     /// Current working directory
     pub current_path: PathBuf,
+    /// Window index
+    pub window_index: usize,
+    /// Window name
+    pub window_name: String,
+}
+
+/// A Claude Code instance running in a tmux pane
+#[derive(Debug, Clone)]
+pub struct ClaudeInstance {
+    // Session info
+    /// Session name
+    pub session_name: String,
+    /// Whether a client is attached to this session
+    pub session_attached: bool,
+
+    // Window info
+    /// Window index within the session
+    pub window_index: usize,
+    /// Window name
+    pub window_name: String,
+
+    // Pane info
+    /// Pane ID (e.g., "%0")
+    pub pane_id: String,
+    /// Pane index within the window
+    pub pane_index: usize,
+
+    // Claude info
+    /// Working directory of the pane
+    pub working_directory: PathBuf,
+    /// Status of Claude Code
+    pub status: ClaudeCodeStatus,
+    /// Git context, if the working directory is a git repository
+    pub git_context: Option<GitContext>,
+}
+
+impl ClaudeInstance {
+    /// Returns a display name combining session, window, and pane info
+    pub fn display_name(&self) -> String {
+        format!(
+            "{}:{}.{}",
+            self.session_name, self.window_index, self.pane_index
+        )
+    }
+
+    /// Returns a shortened version of the working directory for display
+    pub fn display_path(&self) -> String {
+        let path = &self.working_directory;
+
+        // Try to replace home directory with ~
+        if let Some(home) = dirs::home_dir() {
+            if let Ok(stripped) = path.strip_prefix(&home) {
+                return format!("~/{}", stripped.display());
+            }
+        }
+
+        path.display().to_string()
+    }
+
+    /// Returns the tmux target for this pane (for switch-client, send-keys, etc.)
+    pub fn tmux_target(&self) -> String {
+        format!(
+            "{}:{}.{}",
+            self.session_name, self.window_index, self.pane_index
+        )
+    }
 }
 
 /// A tmux session that may contain a Claude Code instance
