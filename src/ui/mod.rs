@@ -134,8 +134,11 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         width = area.width as usize - 15
     );
 
-    let header = Paragraph::new(title)
-        .style(Style::default().fg(Color::Rgb(215, 119, 87)).add_modifier(Modifier::BOLD));
+    let header = Paragraph::new(title).style(
+        Style::default()
+            .fg(Color::Rgb(215, 119, 87))
+            .add_modifier(Modifier::BOLD),
+    );
 
     frame.render_widget(header, area);
 }
@@ -226,7 +229,9 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let path_color = line_color;
 
         let name_style = if is_selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else if is_current {
             Style::default().fg(line_color).add_modifier(Modifier::BOLD)
         } else {
@@ -342,7 +347,11 @@ fn render_expanded_instance_content<'a>(
     let value_style = Style::default().fg(Color::White);
 
     // Instance metadata row
-    let attached_str = if instance.session_attached { "yes" } else { "no" };
+    let attached_str = if instance.session_attached {
+        "yes"
+    } else {
+        "no"
+    };
 
     let meta_line = Line::from(vec![
         Span::raw("     "),
@@ -463,7 +472,10 @@ fn render_expanded_instance_content<'a>(
 
         let action_line = Line::from(vec![
             Span::raw("     "),
-            Span::styled(format!("{} {}", action_marker, action.label()), action_style),
+            Span::styled(
+                format!("{} {}", action_marker, action.label()),
+                action_style,
+            ),
         ]);
         items.push(ListItem::new(action_line));
     }

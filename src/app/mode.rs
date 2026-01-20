@@ -71,7 +71,8 @@ pub enum Mode {
 pub enum SessionAction {
     /// Switch to this session
     SwitchTo,
-    /// Rename this session
+    /// Rename this session (used indirectly via start_rename() -> Mode transition)
+    #[allow(dead_code)]
     Rename,
     /// Create a new session from a worktree
     NewWorktree,

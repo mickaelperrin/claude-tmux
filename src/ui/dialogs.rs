@@ -52,9 +52,7 @@ pub fn render_confirm_action(frame: &mut Frame, app: &App) {
                 Line::raw(""),
                 Line::styled(
                     "⚠ This will permanently delete the directory!",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
             ];
 
@@ -334,9 +332,7 @@ pub fn render_new_session_dialog(
     ));
 
     let text = Text::from(lines);
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -363,9 +359,7 @@ pub fn render_commit_dialog(frame: &mut Frame, message: &str) {
         ),
     ]);
 
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: true });
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -443,9 +437,7 @@ pub fn render_create_pr_dialog(
         ),
     ]);
 
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -696,9 +688,7 @@ pub fn render_new_worktree_dialog(
     ));
 
     let text = Text::from(lines);
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -725,9 +715,7 @@ pub fn render_rename_dialog(frame: &mut Frame, old_name: &str, new_name: &str) {
         ),
     ]);
 
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: true });
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);

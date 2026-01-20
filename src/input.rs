@@ -245,12 +245,18 @@ fn handle_rename_mode(app: &mut App, key: KeyEvent) {
             app.confirm_rename();
         }
         KeyCode::Backspace => {
-            if let Mode::Rename { ref mut new_name, .. } = app.mode {
+            if let Mode::Rename {
+                ref mut new_name, ..
+            } = app.mode
+            {
                 new_name.pop();
             }
         }
         KeyCode::Char(c) => {
-            if let Mode::Rename { ref mut new_name, .. } = app.mode {
+            if let Mode::Rename {
+                ref mut new_name, ..
+            } = app.mode
+            {
                 // Only allow valid session name characters
                 if c.is_alphanumeric() || c == '-' || c == '_' {
                     new_name.push(c);
@@ -390,8 +396,11 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                     ..
                 } = app.mode
                 {
-                    *selected_branch =
-                        Some(selected_branch.map(|i| (i + 1) % filtered_count).unwrap_or(0));
+                    *selected_branch = Some(
+                        selected_branch
+                            .map(|i| (i + 1) % filtered_count)
+                            .unwrap_or(0),
+                    );
                 }
                 app.update_worktree_suggestions();
             }

@@ -165,11 +165,7 @@ impl GitContext {
                 ""
             };
 
-            anyhow::bail!(
-                "git worktree remove failed: {}.{}",
-                stderr.trim(),
-                hint
-            )
+            anyhow::bail!("git worktree remove failed: {}.{}", stderr.trim(), hint)
         }
     }
 }

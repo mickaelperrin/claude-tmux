@@ -47,8 +47,6 @@ pub struct Pane {
     pub pane_index: usize,
     /// Process ID of the pane's shell
     pub pid: u32,
-    /// Current command running in the pane
-    pub current_command: String,
     /// Current working directory
     pub current_path: PathBuf,
     /// Window index
@@ -141,44 +139,4 @@ pub struct Session {
     pub claude_code_status: ClaudeCodeStatus,
     /// Git context, if the working directory is a git repository
     pub git_context: Option<GitContext>,
-}
-
-impl Session {
-    /// Returns a shortened version of the working directory for display
-    pub fn display_path(&self) -> String {
-        let path = &self.working_directory;
-
-        // Try to replace home directory with ~
-        if let Some(home) = dirs::home_dir() {
-            if let Ok(stripped) = path.strip_prefix(&home) {
-                return format!("~/{}", stripped.display());
-            }
-        }
-
-        path.display().to_string()
-    }
-
-    /// Returns a human-readable duration since session creation
-    pub fn duration(&self) -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let elapsed_secs = (now - self.created).max(0) as u64;
-
-        let days = elapsed_secs / 86400;
-        let hours = (elapsed_secs % 86400) / 3600;
-        let minutes = (elapsed_secs % 3600) / 60;
-
-        if days > 0 {
-            format!("{}d {}h", days, hours)
-        } else if hours > 0 {
-            format!("{}h {}m", hours, minutes)
-        } else {
-            format!("{}m", minutes.max(1))
-        }
-    }
 }

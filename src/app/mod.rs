@@ -17,9 +17,7 @@ use crate::session::ClaudeInstance;
 use crate::tmux::Tmux;
 
 // Re-export types that are part of the public API
-pub use mode::{
-    CreatePullRequestField, Mode, NewSessionField, NewWorktreeField, SessionAction,
-};
+pub use mode::{CreatePullRequestField, Mode, NewSessionField, NewWorktreeField, SessionAction};
 
 // Use helpers internally
 use helpers::{default_worktree_path, expand_path, sanitize_for_session_name};
@@ -240,9 +238,9 @@ impl App {
     /// Compute available actions for the selected instance
     fn compute_actions(&mut self) {
         // Extract data we need from the instance first to avoid borrow conflicts
-        let instance_data = self.selected_instance().map(|inst| {
-            (inst.working_directory.clone(), inst.git_context.clone())
-        });
+        let instance_data = self
+            .selected_instance()
+            .map(|inst| (inst.working_directory.clone(), inst.git_context.clone()));
 
         let Some((working_dir, git_context)) = instance_data else {
             self.available_actions = vec![];
@@ -462,10 +460,7 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::MergePullRequestAndClose => {
-                let is_worktree = git_context
-                    .as_ref()
-                    .map(|g| g.is_worktree)
-                    .unwrap_or(false);
+                let is_worktree = git_context.as_ref().map(|g| g.is_worktree).unwrap_or(false);
 
                 // Step 1: Merge PR
                 match git::merge_pull_request(&working_directory, false) {
@@ -492,10 +487,8 @@ impl App {
                             }
                             Err(e) => {
                                 self.refresh_instances();
-                                self.error = Some(format!(
-                                    "PR merged but failed to kill session: {}",
-                                    e
-                                ));
+                                self.error =
+                                    Some(format!("PR merged but failed to kill session: {}", e));
                             }
                         }
                     }

@@ -96,12 +96,10 @@ fn complete_in_directory(dir: &Path, prefix: &str, uses_tilde: bool) -> PathComp
         .collect();
 
     // Sort: directories first, then alphabetically
-    matches.sort_by(|a, b| {
-        match (a.1, b.1) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.0.to_lowercase().cmp(&b.0.to_lowercase()),
-        }
+    matches.sort_by(|a, b| match (a.1, b.1) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.0.to_lowercase().cmp(&b.0.to_lowercase()),
     });
 
     let suggestions: Vec<String> = matches.into_iter().map(|(path, _)| path).collect();
@@ -196,7 +194,11 @@ fn expand_for_completion(path: &str) -> (String, bool) {
 
 /// Calculate ghost text for a branch completion
 /// Returns the suffix that would be added to complete to the target branch
-pub fn branch_ghost_text(input: &str, branches: &[&str], selected: Option<usize>) -> Option<String> {
+pub fn branch_ghost_text(
+    input: &str,
+    branches: &[&str],
+    selected: Option<usize>,
+) -> Option<String> {
     if branches.is_empty() {
         return None;
     }

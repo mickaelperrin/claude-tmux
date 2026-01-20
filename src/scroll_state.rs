@@ -80,7 +80,6 @@ impl ScrollState {
 
         ideal_offset.min(max_offset)
     }
-
 }
 
 #[cfg(test)]
