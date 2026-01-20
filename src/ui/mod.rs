@@ -202,9 +202,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Colors based on status for non-selected lines
         let (status_color, line_color) = if is_selected {
-            let sc = match status {
-                _ => Color::White,
-	}
+            (Color::White, Color::White)
         } else {
             match status {
                 ClaudeCodeStatus::WaitingInput => {
