@@ -29,9 +29,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let available_height = area.height.saturating_sub(4); // minus header, status, footer
     let preview_height = (available_height * 50 / 100).clamp(8, 20);
 
-    // Main layout: header, session list, preview, status bar, footer
+    // Main layout: header, spacing, session list, preview, status bar, footer
     let layout = Layout::vertical([
         Constraint::Length(1),              // Header
+        Constraint::Length(1),              // Spacing after header
         Constraint::Min(3),                 // Session list
         Constraint::Length(preview_height), // Preview pane
         Constraint::Length(1),              // Status bar
@@ -40,10 +41,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     .split(area);
 
     render_header(frame, app, layout[0]);
-    render_session_list(frame, app, layout[1]);
-    render_preview(frame, app, layout[2]);
-    render_status_bar(frame, app, layout[3]);
-    render_footer(frame, app, layout[4]);
+    // layout[1] is empty spacing
+    render_session_list(frame, app, layout[2]);
+    render_preview(frame, app, layout[3]);
+    render_status_bar(frame, app, layout[4]);
+    render_footer(frame, app, layout[5]);
 
     // Render modal overlays
     match &app.mode {
