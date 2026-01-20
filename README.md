@@ -15,7 +15,7 @@ cargo install claude-tmux
 Add the following line to your `~/.tmux.conf`:
 
 ```bash
-bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/claude-tmux"
+bind-key C-c display-popup -E -w 60% -h 60% "~/.cargo/bin/claude-tmux"
 ```
 
 ### Build from source
@@ -29,7 +29,7 @@ cargo build --release
 Add this to your `~/.tmux.conf` to bind claude-tmux to a key:
 
 ```bash
-bind-key C-c display-popup -E -w 80 -h 30 "/path/to/claude-tmux"
+bind-key C-c display-popup -E -w 60% -h 60% "/path/to/claude-tmux"
 ```
 
 ### How to use
@@ -43,7 +43,7 @@ To use pull requests, make sure you have `gh` installed.
 
 Options:
 - `-E` — Close popup when claude-tmux exits
-- `-w 80 -h 30` — Popup dimensions (adjust to preference)
+- `-w 60% -h 60%` — Popup dimensions (60% of terminal size)
 
 ## Features
 
