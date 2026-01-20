@@ -2,6 +2,30 @@
 
 A terminal user interface for managing multiple Claude Code sessions within tmux. claude-tmux provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management, including git worktree and pull request support.
 
+## Fork Changes Summary
+
+This fork introduces several improvements over the [original claude-tmux](https://github.com/nielsgroen/claude-tmux):
+
+### Pane-Focused Architecture
+
+- **ClaudeInstance model**: Replaced session-centric approach with pane-focused `ClaudeInstance` struct that tracks session, window, and pane information
+- **Process tree detection**: Identifies Claude Code processes by walking the process ancestry chain (ppid) rather than relying solely on command names
+- **Multi-pane support**: Can detect Claude Code instances running in any pane, not just the first pane of a session
+
+### Enhanced Status Detection
+
+- **New prompt formats**: Detects additional Claude Code prompt patterns:
+  - Permission prompts: "Do you want to proceed?"
+  - AskUserQuestion menus: "Enter to select"
+- **More robust detection**: Improved pattern matching for various Claude Code UI states
+
+### Visual Improvements
+
+- **Claude Code branding**: Selected sessions now use Claude Code orange (#D77757) instead of cyan
+- **Better contrast**: White text on orange background with bold modifier for selected items
+- **Status colors**: Amber for waiting input, medium gray (#999999) for idle sessions
+- **Improved spacing**: Added visual separation between header and session list
+
 ## Installation
 
 ### Cargo install
@@ -108,18 +132,32 @@ claude-tmux detects Claude Code status by analyzing pane content:
 | Input prompt (`❯`) with border above + "ctrl+c to interrupt" | Working |
 | Input prompt (`❯`) with border above, no interrupt message | Idle |
 | Contains `[y/n]` or `[Y/n]` | Waiting for input |
+| Contains "Do you want to proceed?" | Waiting for input |
+| Contains "Enter to select" (AskUserQuestion menu) | Waiting for input |
 | Otherwise | Unknown |
 
-## Session Model
+## Instance Model
 
-claude-tmux identifies sessions containing Claude Code by looking for panes running the `claude` command. The displayed working directory and preview come from the Claude Code pane when present, otherwise from the first pane.
+claude-tmux uses a pane-focused architecture with `ClaudeInstance` structs that track:
 
-Sessions are sorted with attached sessions first, then alphabetically by name.
+- **Session**: The tmux session containing the instance
+- **Window**: The window within the session
+- **Pane**: The specific pane running Claude Code
+
+Detection works by:
+1. Listing all `claude` processes system-wide
+2. Walking each process's parent chain (ppid) to find associated tmux panes
+3. Creating a `ClaudeInstance` for each detected pane
+
+This approach supports multiple Claude Code instances per session and accurate process detection regardless of pane position.
+
+Instances are sorted with attached sessions first, then alphabetically by session name.
 
 ## Dependencies
 
 - [ratatui](https://ratatui.rs/) — Terminal UI framework
 - [crossterm](https://github.com/crossterm-rs/crossterm) — Terminal manipulation
+- [git2](https://github.com/rust-lang/git2-rs) — libgit2 bindings for git operations
 - [ansi-to-tui](https://github.com/uttarayan21/ansi-to-tui) — ANSI escape sequence rendering
 - [anyhow](https://github.com/dtolnay/anyhow) — Error handling
 - [dirs](https://github.com/dirs-dev/dirs-rs) — Home directory resolution
@@ -131,12 +169,25 @@ Sessions are sorted with attached sessions first, then alphabetically by name.
 claude-tmux/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs        # Entry point, terminal setup
-│   ├── app.rs         # Application state machine
-│   ├── ui.rs          # Ratatui rendering
-│   ├── tmux.rs        # tmux command wrapper
-│   ├── session.rs     # Session/Pane data structures
-│   ├── detection.rs   # Claude Code status detection
-│   └── input.rs       # Keyboard event handling
+│   ├── main.rs           # Entry point, terminal setup, event loop
+│   ├── app/              # Application state machine
+│   │   ├── mod.rs        # App struct, actions, dialog flows
+│   │   ├── mode.rs       # UI mode enum (Normal, ActionMenu, dialogs)
+│   │   └── helpers.rs    # Path expansion, sanitization utilities
+│   ├── ui/               # Ratatui rendering
+│   │   ├── mod.rs        # Main render function, layout, components
+│   │   ├── dialogs.rs    # Modal dialog rendering
+│   │   └── help.rs       # Help screen and message overlays
+│   ├── git/              # Git and GitHub operations
+│   │   ├── mod.rs        # GitContext detection via libgit2
+│   │   ├── operations.rs # push/pull/fetch/commit/stage via git CLI
+│   │   ├── worktree.rs   # Worktree and branch management
+│   │   └── github.rs     # GitHub CLI (gh) PR operations
+│   ├── tmux.rs           # tmux command wrapper, ClaudeInstance detection
+│   ├── session.rs        # Session, Pane, ClaudeInstance structs
+│   ├── detection.rs      # Claude Code status detection
+│   ├── input.rs          # Keyboard event handling per mode
+│   ├── completion.rs     # Path completion for dialogs
+│   └── scroll_state.rs   # List scrolling state management
 └── README.md
 ```
