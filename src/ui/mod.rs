@@ -218,7 +218,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                     (c, c)
                 }
                 ClaudeCodeStatus::Idle => {
-                    let c = Color::Rgb(85, 85, 85); // #555555 - Dark gray, low priority
+                    let c = Color::Rgb(153, 153, 153); // #999999 - Medium gray, low priority
                     (c, c)
                 }
             }
