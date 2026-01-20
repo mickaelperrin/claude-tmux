@@ -204,12 +204,13 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let status_color = if is_selected {
             match status {
                 ClaudeCodeStatus::Working => Color::Green,
-                ClaudeCodeStatus::WaitingInput => Color::Rgb(255, 191, 0), // Amber
-                ClaudeCodeStatus::Idle => Color::White,
-                ClaudeCodeStatus::Unknown => Color::Gray,
+                _ => Color::White,
             }
         } else {
-            unselected_color
+            match status {
+                ClaudeCodeStatus::WaitingInput => Color::Rgb(255, 191, 0), // Amber
+                _ => unselected_color,
+            }
         };
 
         let path_color = if is_selected {
