@@ -11,8 +11,18 @@ pub fn detect_status(content: &str) -> ClaudeCodeStatus {
         return ClaudeCodeStatus::Idle;
     }
 
-    // No input field - check for permission prompt
+    // No input field - check for permission prompt (legacy format)
     if content.contains("[y/n]") || content.contains("[Y/n]") {
+        return ClaudeCodeStatus::WaitingInput;
+    }
+
+    // Detect permission prompt (new format)
+    if content.contains("Do you want to proceed?") {
+        return ClaudeCodeStatus::WaitingInput;
+    }
+
+    // Detect AskUserQuestion menu interface
+    if content.contains("Enter to select") && content.contains("to navigate") {
         return ClaudeCodeStatus::WaitingInput;
     }
 
@@ -63,6 +73,18 @@ mod tests {
     #[test]
     fn test_waiting_input() {
         let content = "Delete files? [y/n]";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn test_waiting_input_ask_user_question() {
+        let content = "▢ Question\n◉ 1. Option 1\n2. Option 2\nEnter to select · ↑/↓ to navigate · Esc to cancel";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn test_waiting_input_permission_prompt() {
+        let content = "Bash command\necho test\nDo you want to proceed?\n❯ 1. Yes\n2. Yes, and always allow\nEsc to cancel";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
     }
 

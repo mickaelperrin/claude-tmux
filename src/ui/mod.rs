@@ -197,34 +197,40 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         let status = &instance.status;
 
-        // Base color for non-selected lines
-        let unselected_color = Color::Rgb(85, 85, 85); // #555
-
-        // Status colors
-        let status_color = if is_selected {
-            match status {
-                ClaudeCodeStatus::Working => Color::Green,
+        // Colors based on status for non-selected lines
+        let (status_color, line_color) = if is_selected {
+            let sc = match status {
                 _ => Color::White,
-            }
+	}
         } else {
             match status {
-                ClaudeCodeStatus::WaitingInput => Color::Rgb(255, 191, 0), // Amber
-                _ => unselected_color,
+                ClaudeCodeStatus::WaitingInput => {
+                    let c = Color::Rgb(229, 192, 123); // #E5C07B - Yellow/Gold, most visible
+                    (c, c)
+                }
+                ClaudeCodeStatus::Working => {
+                    let c = Color::Rgb(152, 195, 121); // #98C379 - Green, active
+                    (c, c)
+                }
+                ClaudeCodeStatus::Unknown => {
+                    let c = Color::Rgb(102, 102, 102); // #666666 - Medium gray
+                    (c, c)
+                }
+                ClaudeCodeStatus::Idle => {
+                    let c = Color::Rgb(85, 85, 85); // #555555 - Dark gray, low priority
+                    (c, c)
+                }
             }
         };
 
-        let path_color = if is_selected {
-            Color::White
-        } else {
-            unselected_color
-        };
+        let path_color = line_color;
 
         let name_style = if is_selected {
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
         } else if is_current {
-            Style::default().fg(unselected_color).add_modifier(Modifier::BOLD)
+            Style::default().fg(line_color).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(unselected_color)
+            Style::default().fg(line_color)
         };
 
         // Build git info spans
