@@ -204,7 +204,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let status_color = if is_selected {
             match status {
                 ClaudeCodeStatus::Working => Color::Green,
-                ClaudeCodeStatus::WaitingInput => Color::Yellow,
+                ClaudeCodeStatus::WaitingInput => Color::Rgb(255, 191, 0), // Amber
                 ClaudeCodeStatus::Idle => Color::White,
                 ClaudeCodeStatus::Unknown => Color::Gray,
             }
