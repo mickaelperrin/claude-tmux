@@ -26,6 +26,13 @@ This fork introduces several improvements over the [original claude-tmux](https:
 - **Status colors**: Amber for waiting input, medium gray (#999999) for idle sessions
 - **Improved spacing**: Added visual separation between header and session list
 
+### Performance Optimizations
+
+- **Fast startup**: UI appears immediately (~50-100ms) instead of blocking until all data loads
+- **Progressive loading**: Session list loads first, git context loads progressively in background
+- **Batch tmux commands**: Single `list-panes -a` call replaces per-session calls
+- **Background threading**: Data loading happens in a background thread with non-blocking UI updates
+
 ## Installation
 
 ### Cargo install
@@ -153,6 +160,21 @@ This approach supports multiple Claude Code instances per session and accurate p
 
 Instances are sorted with attached sessions first, then alphabetically by session name.
 
+## Loading Architecture
+
+claude-tmux uses a deferred loading approach for fast startup:
+
+1. **Immediate UI**: `App::new_fast()` returns instantly with an empty instance list
+2. **Background thread**: `start_background_loading()` spawns a thread that:
+   - Fetches all panes via batch `tmux list-panes -a` command
+   - Detects Claude processes and captures pane content for status
+   - Sends instances to the main thread via `mpsc` channel
+   - Progressively loads git context for each instance
+3. **Event loop polling**: `poll_loading()` receives messages non-blocking each frame
+4. **Progressive UI updates**: Status bar shows loading state, git info shows "(...)" until loaded
+
+This architecture ensures the UI appears within ~50-100ms regardless of how many sessions exist or how slow git operations are.
+
 ## Dependencies
 
 - [ratatui](https://ratatui.rs/) — Terminal UI framework
@@ -169,13 +191,13 @@ Instances are sorted with attached sessions first, then alphabetically by sessio
 claude-tmux/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs           # Entry point, terminal setup, event loop
+│   ├── main.rs           # Entry point, terminal setup, event loop with background loading
 │   ├── app/              # Application state machine
-│   │   ├── mod.rs        # App struct, actions, dialog flows
+│   │   ├── mod.rs        # App struct, LoadingState, background thread messaging
 │   │   ├── mode.rs       # UI mode enum (Normal, ActionMenu, dialogs)
 │   │   └── helpers.rs    # Path expansion, sanitization utilities
 │   ├── ui/               # Ratatui rendering
-│   │   ├── mod.rs        # Main render function, layout, components
+│   │   ├── mod.rs        # Main render function, layout, loading states
 │   │   ├── dialogs.rs    # Modal dialog rendering
 │   │   └── help.rs       # Help screen and message overlays
 │   ├── git/              # Git and GitHub operations
@@ -183,7 +205,7 @@ claude-tmux/
 │   │   ├── operations.rs # push/pull/fetch/commit/stage via git CLI
 │   │   ├── worktree.rs   # Worktree and branch management
 │   │   └── github.rs     # GitHub CLI (gh) PR operations
-│   ├── tmux.rs           # tmux command wrapper, ClaudeInstance detection
+│   ├── tmux.rs           # tmux command wrapper, batch pane listing
 │   ├── session.rs        # Session, Pane, ClaudeInstance structs
 │   ├── detection.rs      # Claude Code status detection
 │   ├── input.rs          # Keyboard event handling per mode

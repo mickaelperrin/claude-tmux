@@ -39,9 +39,16 @@ fn main() -> Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    let mut app = App::new()?;
+    // Fast initialization - UI appears immediately
+    let mut app = App::new_fast()?;
+
+    // Start background loading of instances and git contexts
+    app.start_background_loading();
 
     loop {
+        // Poll for background loading updates (non-blocking)
+        app.poll_loading();
+
         // Draw the UI
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
@@ -50,8 +57,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             break;
         }
 
+        // Faster poll during loading for responsiveness (~60fps)
+        // Normal poll when loading is complete to reduce CPU usage
+        let poll_ms = if app.is_loading() { 16 } else { 100 };
+
         // Handle events
-        if event::poll(std::time::Duration::from_millis(100))? {
+        if event::poll(std::time::Duration::from_millis(poll_ms))? {
             if let Event::Key(key) = event::read()? {
                 input::handle_key(&mut app, key);
             }

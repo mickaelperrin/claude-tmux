@@ -9,6 +9,10 @@
 mod helpers;
 mod mode;
 
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+
 use anyhow::Result;
 
 use crate::git::{self, GitContext, PullRequestInfo};
@@ -21,6 +25,33 @@ pub use mode::{CreatePullRequestField, Mode, NewSessionField, NewWorktreeField, 
 
 // Use helpers internally
 use helpers::{default_worktree_path, expand_path, sanitize_for_session_name};
+
+/// Loading state for progressive data loading
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum LoadingState {
+    /// Not started loading yet
+    #[default]
+    NotStarted,
+    /// Loading basic instance data
+    LoadingInstances,
+    /// Loading git contexts for instances
+    LoadingGitContexts,
+    /// All loading complete
+    Complete,
+}
+
+/// Messages sent from background loading thread
+pub enum LoadingMessage {
+    /// Basic instances loaded (without git context)
+    Instances(Vec<ClaudeInstance>),
+    /// Git context loaded for a specific instance
+    GitContext {
+        index: usize,
+        context: Option<GitContext>,
+    },
+    /// All loading complete
+    Complete,
+}
 
 /// Main application state
 pub struct App {
@@ -52,6 +83,10 @@ pub struct App {
     pub pr_info: Option<PullRequestInfo>,
     /// Scroll state for the instance list
     pub scroll_state: ScrollState,
+    /// Current loading state for progressive data loading
+    pub loading_state: LoadingState,
+    /// Receiver for background loading messages
+    pub loading_receiver: Option<Receiver<LoadingMessage>>,
 }
 
 impl App {
@@ -59,7 +94,11 @@ impl App {
     // Initialization and core lifecycle
     // =========================================================================
 
-    /// Create a new App instance
+    /// Create a new App instance (synchronous, loads all data before returning)
+    ///
+    /// This is the original blocking initialization. For faster startup, use
+    /// `new_fast()` followed by `start_background_loading()`.
+    #[allow(dead_code)]
     pub fn new() -> Result<Self> {
         let instances = Tmux::list_claude_instances()?;
         let current_pane = Tmux::current_pane()?;
@@ -79,10 +118,130 @@ impl App {
             pending_action: None,
             pr_info: None,
             scroll_state: ScrollState::new(),
+            loading_state: LoadingState::Complete,
+            loading_receiver: None,
         };
 
         app.update_preview();
         Ok(app)
+    }
+
+    /// Create a new App instance with fast startup (UI appears immediately)
+    ///
+    /// Call `start_background_loading()` after this to begin loading data.
+    /// Call `poll_loading()` in the event loop to receive updates.
+    pub fn new_fast() -> Result<Self> {
+        // Only get current_pane - this is a single fast tmux call
+        let current_pane = Tmux::current_pane()?;
+
+        Ok(Self {
+            instances: Vec::new(),
+            selected: 0,
+            mode: Mode::Normal,
+            should_quit: false,
+            current_pane,
+            filter: String::new(),
+            error: None,
+            message: None,
+            preview_content: None,
+            available_actions: Vec::new(),
+            selected_action: 0,
+            pending_action: None,
+            pr_info: None,
+            scroll_state: ScrollState::new(),
+            loading_state: LoadingState::NotStarted,
+            loading_receiver: None,
+        })
+    }
+
+    /// Start background loading of instances and git contexts
+    pub fn start_background_loading(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.loading_receiver = Some(rx);
+        self.loading_state = LoadingState::LoadingInstances;
+
+        thread::spawn(move || {
+            // Phase 1: Load basic instances (with status detection but without git context)
+            match Tmux::list_claude_instances_basic() {
+                Ok(instances) => {
+                    // Collect paths before sending instances
+                    let paths: Vec<PathBuf> = instances
+                        .iter()
+                        .map(|i| i.working_directory.clone())
+                        .collect();
+
+                    // Send instances to main thread
+                    if tx.send(LoadingMessage::Instances(instances)).is_err() {
+                        return; // Receiver dropped
+                    }
+
+                    // Phase 2: Load git contexts progressively
+                    for (index, path) in paths.iter().enumerate() {
+                        let context = GitContext::detect(path);
+                        if tx
+                            .send(LoadingMessage::GitContext { index, context })
+                            .is_err()
+                        {
+                            return; // Receiver dropped
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Send empty list on error
+                    let _ = tx.send(LoadingMessage::Instances(Vec::new()));
+                }
+            }
+
+            // Signal completion
+            let _ = tx.send(LoadingMessage::Complete);
+        });
+    }
+
+    /// Poll for background loading updates (call this in the event loop)
+    pub fn poll_loading(&mut self) {
+        // Take the receiver out to avoid borrow conflicts
+        let Some(rx) = self.loading_receiver.take() else {
+            return;
+        };
+
+        let mut should_update_preview = false;
+        let mut completed = false;
+
+        // Process all available messages without blocking
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                LoadingMessage::Instances(instances) => {
+                    self.instances = instances;
+                    self.loading_state = LoadingState::LoadingGitContexts;
+                    should_update_preview = true;
+                }
+                LoadingMessage::GitContext { index, context } => {
+                    if let Some(inst) = self.instances.get_mut(index) {
+                        inst.git_context = context;
+                    }
+                }
+                LoadingMessage::Complete => {
+                    self.loading_state = LoadingState::Complete;
+                    completed = true;
+                    break;
+                }
+            }
+        }
+
+        // Put the receiver back if not completed
+        if !completed {
+            self.loading_receiver = Some(rx);
+        }
+
+        // Update preview after receiver is handled
+        if should_update_preview {
+            self.update_preview();
+        }
+    }
+
+    /// Check if loading is still in progress
+    pub fn is_loading(&self) -> bool {
+        self.loading_state != LoadingState::Complete
     }
 
     /// Update the preview content for the currently selected instance

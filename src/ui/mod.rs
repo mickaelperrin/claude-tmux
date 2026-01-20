@@ -18,7 +18,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode};
+use crate::app::{App, LoadingState, Mode};
 use crate::session::ClaudeCodeStatus;
 
 /// Render the application UI
@@ -156,10 +156,17 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let filtered = app.filtered_instances();
 
     if filtered.is_empty() {
-        let empty_msg = if app.filter.is_empty() {
-            "No Claude Code instances found. Press 'n' to create a new session."
-        } else {
-            "No instances match the filter."
+        let empty_msg = match app.loading_state {
+            LoadingState::NotStarted | LoadingState::LoadingInstances => {
+                "Loading Claude Code instances..."
+            }
+            LoadingState::LoadingGitContexts | LoadingState::Complete => {
+                if app.filter.is_empty() {
+                    "No Claude Code instances found. Press 'n' to create a new session."
+                } else {
+                    "No instances match the filter."
+                }
+            }
         };
         let paragraph = Paragraph::new(empty_msg)
             .style(Style::default().fg(Color::DarkGray))
@@ -279,6 +286,9 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             ];
             spans.extend(status_spans);
             spans
+        } else if app.loading_state == LoadingState::LoadingGitContexts {
+            // Show loading placeholder while git contexts are being loaded
+            vec![Span::styled(" (...)", Style::default().fg(Color::DarkGray))]
         } else {
             vec![]
         };
@@ -556,6 +566,17 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
     if waiting > 0 {
         parts.push(format!("{} awaiting input", waiting));
+    }
+
+    // Add loading indicator
+    match app.loading_state {
+        LoadingState::NotStarted | LoadingState::LoadingInstances => {
+            parts.push("loading...".to_string());
+        }
+        LoadingState::LoadingGitContexts => {
+            parts.push("loading git info...".to_string());
+        }
+        LoadingState::Complete => {}
     }
 
     let status = parts.join(" │ ");

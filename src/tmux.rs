@@ -138,6 +138,105 @@ impl Tmux {
         Ok(panes)
     }
 
+    /// List all panes across all sessions in a single tmux call
+    ///
+    /// This is more efficient than calling list_panes() for each session separately.
+    fn list_all_panes() -> Result<Vec<(String, bool, Pane)>> {
+        let output = Command::new("tmux")
+            .args([
+                "list-panes",
+                "-a", // All sessions, all windows
+                "-F",
+                "#{session_name}\t#{session_attached}\t#{pane_id}\t#{pane_index}\t#{pane_pid}\t#{pane_current_path}\t#{window_index}\t#{window_name}",
+            ])
+            .output()
+            .context("Failed to execute tmux list-panes -a")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("no server running") || stderr.contains("no sessions") {
+                return Ok(Vec::new());
+            }
+            anyhow::bail!("tmux list-panes -a failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut all_panes = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 8 {
+                let session_name = parts[0].to_string();
+                let attached = parts[1] == "1";
+                let pane = Pane {
+                    id: parts[2].to_string(),
+                    pane_index: parts[3].parse().unwrap_or(0),
+                    pid: parts[4].parse().unwrap_or(0),
+                    current_path: PathBuf::from(parts[5]),
+                    window_index: parts[6].parse().unwrap_or(0),
+                    window_name: parts[7].to_string(),
+                };
+                all_panes.push((session_name, attached, pane));
+            }
+        }
+
+        Ok(all_panes)
+    }
+
+    /// List Claude instances without git context (for fast initial loading)
+    ///
+    /// This uses batch tmux commands for efficiency. Git context should be
+    /// loaded separately via GitContext::detect() in a background thread.
+    pub fn list_claude_instances_basic() -> Result<Vec<ClaudeInstance>> {
+        // Get all panes in a single tmux call
+        let all_panes = Self::list_all_panes()?;
+
+        // Collect all pane PIDs
+        let all_pane_pids: Vec<u32> = all_panes
+            .iter()
+            .filter(|(_, _, pane)| pane.pid > 0)
+            .map(|(_, _, pane)| pane.pid)
+            .collect();
+
+        // Find which panes have Claude Code running
+        let panes_with_claude = Self::find_panes_with_claude(&all_pane_pids);
+
+        // Build ClaudeInstance for each pane with Claude (without git context)
+        let mut instances: Vec<ClaudeInstance> = Vec::new();
+
+        for (session_name, attached, pane) in all_panes {
+            if panes_with_claude.contains(&pane.pid) {
+                // Detect Claude status
+                let status = Self::capture_pane(&pane.id, 15, true)
+                    .map(|content| detect_status(&content))
+                    .unwrap_or(ClaudeCodeStatus::Unknown);
+
+                instances.push(ClaudeInstance {
+                    session_name,
+                    session_attached: attached,
+                    window_index: pane.window_index,
+                    window_name: pane.window_name,
+                    pane_id: pane.id,
+                    pane_index: pane.pane_index,
+                    working_directory: pane.current_path,
+                    status,
+                    git_context: None, // Will be loaded separately
+                });
+            }
+        }
+
+        // Sort by: attached sessions first, then session name, then window index, then pane index
+        instances.sort_by(|a, b| {
+            b.session_attached
+                .cmp(&a.session_attached)
+                .then_with(|| a.session_name.cmp(&b.session_name))
+                .then_with(|| a.window_index.cmp(&b.window_index))
+                .then_with(|| a.pane_index.cmp(&b.pane_index))
+        });
+
+        Ok(instances)
+    }
+
     /// Get the process parent map (pid -> ppid) for all processes
     fn get_process_parent_map() -> HashMap<u32, u32> {
         let mut map = HashMap::new();
