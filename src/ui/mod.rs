@@ -285,7 +285,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let line = Line::from(line_spans);
 
         let style = if is_selected {
-            Style::default().bg(Color::DarkGray)
+            Style::default().fg(Color::Black).bg(Color::Rgb(215, 119, 87))
         } else {
             Style::default()
         };
